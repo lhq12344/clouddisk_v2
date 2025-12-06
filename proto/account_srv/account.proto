@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package account;
+option go_package = "clouddisk_v2/account_srv/protobuf;accountpb";
+
+
+message ReqSignin {
+    string username = 1;
+    string password = 2;
+}
+
+message Resp {
+    int32 code = 1;
+    string message = 2;
+}
+
+message ReqSignup  {
+    string username = 1;
+    string password = 2;
+    string email = 3;
+}
+
+
+
+message Reqverifycode  {
+    string email = 1;
+    string code = 2;
+}
+
+
+service accountService {
+  rpc Signin(ReqSignin) returns (Resp) {}
+	rpc Signup(ReqSignup) returns (Resp) {}
+	rpc VerifyCode(Reqverifycode) returns (Resp) {}
+}

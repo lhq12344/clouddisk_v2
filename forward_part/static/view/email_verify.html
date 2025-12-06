@@ -1,0 +1,95 @@
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <script src="http://libs.baidu.com/jquery/2.0.0/jquery.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.3.7/dist/css/bootstrap.min.css">
+</head>
+
+<body>
+  <div style="width:480px;margin:40px auto;text-align:center;">
+    <div style="font-size:24px;font-weight:bold;">邮箱验证</div>
+    <br />
+    <div class="form-group">
+      <label>邮箱地址</label>
+      <input id="email" class="form-control" type="email" placeholder="输入您的邮箱">
+    </div>
+    <div class="form-group">
+      <button id="sendBtn" class="btn btn-primary" onclick="sendCode()">发送验证码</button>
+    </div>
+    <div class="form-group">
+      <label>验证码</label>
+      <input id="code" class="form-control" type="text" placeholder="输入验证码">
+    </div>
+    <div style="margin-top:16px;">
+      <button class="btn btn-success" onclick="verify()">验证并继续</button>
+      <span id="msg" style="color:red;margin-left:12px;"></span>
+    </div>
+  </div>
+</body>
+
+<script>
+  var lastEmail = '';
+  function sendCode() {
+    var email = document.getElementById('email').value.trim();
+    if (!email) {
+      document.getElementById('msg').innerText = '请输入邮箱';
+      return;
+    }
+    document.getElementById('msg').innerText = '已发送验证码（模拟），请查看邮箱。';
+    lastEmail = email;
+    // 真实场景：发起 /user/send_verify_code POST 请求
+    $.ajax({
+      url: '/file/sendverifycode',
+      method: 'POST',
+      data: { email: email },
+      success: function (body) {
+        // 服务器应该返回 {status: 'ok'} 或错误信息
+        console.log('send resp', body);
+      },
+      error: function () { console.log('send error'); }
+    });
+  }
+
+  function verify() {
+    var email = document.getElementById('email').value.trim();
+    var code = document.getElementById('code').value.trim();
+    if (!email || !code) {
+      document.getElementById('msg').innerText = '请输入邮箱和验证码';
+      return;
+    }
+    // 向后端校验验证码
+    $.ajax({
+      url: '/file/verifycode',
+      method: 'POST',
+      data: { email: email, code: code },
+      success: function (body) {
+        try {
+          var resp = typeof body === 'string' ? JSON.parse(body) : body;
+          if (resp && resp.status === 'ok') {
+            // 验证成功：将邮箱保存在 sessionStorage 中，再跳转到注册页面（避免出现在 URL）
+            try { sessionStorage.setItem('signup_email', email); } catch (e) { /* ignore */ }
+            window.location.href = '/user/signup';
+          } else {
+            document.getElementById('msg').innerText = '验证码错误';
+          }
+        } catch (e) {
+          document.getElementById('msg').innerText = '服务器返回异常';
+        }
+      },
+      error: function () {
+        document.getElementById('msg').innerText = '验证请求失败';
+      }
+    });
+  }
+
+  // 如果 URL 中已经有 email 参数，自动填充
+  (function () {
+    var m = location.search.match(/[?&]email=([^&]+)/);
+    if (m) {
+      document.getElementById('email').value = decodeURIComponent(m[1]);
+    }
+  })();
+</script>
+
+</html>
