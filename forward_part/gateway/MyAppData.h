@@ -4,6 +4,8 @@
 class MyAppData
 {
 public:
+    std::string kafkaHost;
+	int kafkaPort;
 	std::string consulHost;
 	int consulPort;
 	std::string SigningKey;

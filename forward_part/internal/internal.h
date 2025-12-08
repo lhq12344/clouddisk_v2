@@ -20,6 +20,12 @@ struct RedisConfig
 	std::string port;
 };
 
+struct KafkaConfig
+{
+	std::string host;
+	std::string port;
+};
+
 struct MysqlConfig
 {
 	std::string host;
@@ -49,7 +55,7 @@ public:
 	MysqlConfig mysql;
 	ConsulConfig consul;
 	JWTConfig jwt;
-
+	KafkaConfig kafka;
 	/// ---- 单例全局访问接口 ----
 	static AppConfig &getInstance()
 	{

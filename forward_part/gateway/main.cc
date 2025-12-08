@@ -12,6 +12,8 @@ int main()
 	std::string SigningKey = cfg.jwt.secret;
 	std::string consulHost = cfg.consul.host;
 	int consulPort = std::atoi(cfg.consul.port.c_str());
+	std::string kafkaHost = cfg.kafka.host;
+	int kafkaPort = std::atoi(cfg.kafka.port.c_str());
 	std::string serviceName = "gateway_srv";
 	std::string serviceId = serviceName + std::to_string(port);
 	ConsulRegister consulRegister(
@@ -29,6 +31,8 @@ int main()
 										  { 
 											MyAppData::instance().consulHost = consulHost;
 											MyAppData::instance().consulPort = consulPort;
+											MyAppData::instance().kafkaHost = kafkaHost;
+											MyAppData::instance().kafkaPort = kafkaPort;
 											MyAppData::instance().SigningKey = SigningKey;
 											consulRegister.registerService(); });
 	LOG_INFO("[drogon]Server started:{}:{} ", host, port);

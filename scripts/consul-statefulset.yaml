@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: infra
+spec:
+  clusterIP: None
+  selector:
+    app: consul
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: consul
+  namespace: infra
+spec:
+  replicas: 3
+  serviceName: "consul"
+  selector:
+    matchLabels:
+      app: consul
+  template:
+    metadata:
+      labels:
+        app: consul
+    spec:
+      serviceAccountName: consul
+      containers:
+        - name: consul
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/hashicorp/consul:1.22.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "agent"
+            - "-server"
+            - "-ui"
+            - "-bootstrap-expect=3"
+            - "-datacenter=dc1"
+            - "-node=$(POD_NAME)"
+            - "-bind=0.0.0.0"
+            - "-client=0.0.0.0"
+            - "-retry-join=consul-0.consul.infra.svc"
+            - "-retry-join=consul-1.consul.infra.svc"
+            - "-retry-join=consul-2.consul.infra.svc"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8500
+              name: http
+            - containerPort: 8600
+              name: dns
+          volumeMounts:
+            - name: consul-data
+              mountPath: /consul/data
+  volumeClaimTemplates:
+    - metadata:
+        name: consul-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: nfs-storage
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: consul
+  namespace: infra
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consul-role
+  namespace: infra
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "endpoints", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: consul-rolebinding
+  namespace: infra
+subjects:
+  - kind: ServiceAccount
+    name: consul
+    namespace: infra
+roleRef:
+  kind: Role
+  name: consul-role
+  apiGroup: rbac.authorization.k8s.io

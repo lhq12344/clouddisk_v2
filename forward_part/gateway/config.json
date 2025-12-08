@@ -1,7 +1,7 @@
 /* This is a JSON format configuration file
  */
 {
-    /*
+    
     //ssl:The global SSL settings. "key" and "cert" are the path to the SSL key and certificate. While
     //    "conf" is an array of 1 or 2-element tuples that supplies file style options for `SSL_CONF_cmd`.
     "ssl": {
@@ -79,9 +79,9 @@
             //name: Name of the client,'default' by default
             "name": "default",
             //host: Server IP, 127.0.0.1 by default
-            "host": "127.0.0.1",
+            "host": "192.168.149.128",
             //port: Server port, 6379 by default
-            "port": 6379,
+            "port": 30379,
             //username: '' by default which means 'default' in redis ACL
             "username": "",
             //passwd: '' by default
@@ -96,9 +96,9 @@
             "number_of_connections": 1,
             //timeout: -1.0 by default, in seconds, the timeout for executing a command.
             //zero or negative value means no timeout.
-            "timeout": -1.0
+            "timeout": 5.0
         }
-    ],*/
+    ],
     "app": {
         //number_of_threads: The number of IO threads, 1 by default, if the value is set to 0, the number of threads
         //is the number of CPU cores

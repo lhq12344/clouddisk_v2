@@ -51,6 +51,29 @@ else()
     message(WARNING "Nacos C++ SDK library 'nacos-cli' not found. Ensure it's installed under /usr/local/lib.")
 endif()
 
+# librdkafka C++ bindings (used by KafkaProducer)
+find_path(RDKAFKA_INCLUDE_DIR
+          NAMES librdkafka/rdkafkacpp.h
+          PATHS /usr/include /usr/local/include)
+find_library(RDKAFKA_CPP_LIB
+             NAMES rdkafka++
+             PATHS /usr/lib /usr/local/lib)
+find_library(RDKAFKA_C_LIB
+             NAMES rdkafka
+             PATHS /usr/lib /usr/local/lib)
+
+if (RDKAFKA_INCLUDE_DIR)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${RDKAFKA_INCLUDE_DIR})
+else()
+    message(WARNING "librdkafka headers not found. Set RDKAFKA_INCLUDE_DIR manually if installed in a non-standard location.")
+endif()
+
+if (RDKAFKA_CPP_LIB AND RDKAFKA_C_LIB)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${RDKAFKA_CPP_LIB} ${RDKAFKA_C_LIB})
+else()
+    message(FATAL_ERROR "librdkafka++ and/or librdkafka libraries not found. Please install librdkafka-dev (with C++ bindings).")
+endif()
+
 if (CMAKE_CXX_STANDARD LESS 17)
     message(FATAL_ERROR "c++17 or higher is required")
 elseif (CMAKE_CXX_STANDARD LESS 20)

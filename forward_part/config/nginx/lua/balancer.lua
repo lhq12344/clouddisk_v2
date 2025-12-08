@@ -34,7 +34,7 @@ function _M.pick(service_name)
     local host, port = target:match("(.+):(%d+)")
     port = tonumber(port)
 
-    ngx.log(ngx.ERR, "proxy to ", service_name, " => ", host, ":", port)
+    ngx.log(ngx.INFO, "proxy to ", service_name, " => ", host, ":", port)
 
     local ok2, err2 = balancer.set_current_peer(host, port)
     if not ok2 then

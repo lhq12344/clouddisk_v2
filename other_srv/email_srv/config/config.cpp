@@ -1,4 +1,4 @@
-#include "internal.h"
+#include "config.h"
 
 using json = nlohmann::json;
 using namespace nacos;
@@ -20,24 +20,21 @@ public:
 			auto j = json::parse(content);
 
 			AppConfig &cfg = AppConfig::getInstance();
-			cfg.kafka.host = j["kafka"]["host"];
-			cfg.kafka.port = j["kafka"]["port"];
+			cfg.kafka.brokers = j["kafka"]["brokers"];
+			cfg.kafka.topic = j["kafka"]["topic"];
+			cfg.kafka.group_id = j["kafka"]["group_id"];
 
 			cfg.redis.host = j["redis"]["host"];
 			cfg.redis.port = j["redis"]["port"];
 
-			cfg.mysql.host = j["mysql"]["host"];
-			cfg.mysql.port = j["mysql"]["port"];
-			cfg.mysql.user = j["mysql"]["user"];
-			cfg.mysql.password = j["mysql"]["password"];
+			cfg.smtp.url = j["smtp"]["url"];
+			cfg.smtp.user = j["smtp"]["user"];
+			cfg.smtp.pass = j["smtp"]["pass"];
+			cfg.smtp.from = j["smtp"]["from"];
+			cfg.smtp.from_name = j["smtp"]["from_name"];
 
-			cfg.consul.host = j["consul"]["host"];
-			cfg.consul.port = j["consul"]["port"];
-			cfg.consul.account_srv.host = j["consul"]["account_srv"]["host"];
-			cfg.consul.file_srv.host = j["consul"]["file_srv"]["host"];
-			cfg.consul.gateway_srv.host = j["consul"]["gateway_srv"]["host"];
-
-			cfg.jwt.secret = j["jwt"]["signing_key"];
+			cfg.email.code_ttl_sec = j["email"]["code_ttl_sec"];
+			cfg.email.dedup_ttl_sec = j["email"]["dedup_ttl_sec"];
 
 			std::cout << "[Nacos] Config parsed successfully\n";
 		}
@@ -67,13 +64,13 @@ void InitAppConfig()
 
 	// 4. 监听配置
 	ConfigListener *listener = new ConfigListener();
-	configSvc->addListener("clouddisk.json", "dev", listener);
+	configSvc->addListener("email_config.json", "dev", listener);
 
 	// 5. 获取初始配置
 	NacosString content;
 	try
 	{
-		content = configSvc->getConfig("clouddisk.json", "dev", 5000);
+		content = configSvc->getConfig("email_config.json", "dev", 5000);
 	}
 	catch (NacosException &e)
 	{
@@ -94,34 +91,4 @@ void InitAppConfig()
 			  << content << std::endl;
 
 	ConfigListener::LoadConfigFromString(content);
-}
-
-// 获取未占用的port
-int GetFreePort()
-{
-	int sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock < 0)
-		return -1;
-
-	sockaddr_in addr{};
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = 0; // 让 OS 自动选择可用端口
-
-	if (bind(sock, (sockaddr *)&addr, sizeof(addr)) < 0)
-	{
-		close(sock);
-		return -1;
-	}
-
-	socklen_t len = sizeof(addr);
-	if (getsockname(sock, (sockaddr *)&addr, &len) == -1)
-	{
-		close(sock);
-		return -1;
-	}
-
-	int port = ntohs(addr.sin_port);
-	close(sock);
-	return port;
 }
