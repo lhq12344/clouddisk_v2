@@ -20,16 +20,19 @@ message ReqSignup  {
     string email = 3;
 }
 
-
-
 message Reqverifycode  {
     string email = 1;
     string code = 2;
 }
 
+message ReqUserinfo  {
+    int32 ID = 1;
+    string username = 2;
+}
 
 service accountService {
   rpc Signin(ReqSignin) returns (Resp) {}
-	rpc Signup(ReqSignup) returns (Resp) {}
-	rpc VerifyCode(Reqverifycode) returns (Resp) {}
+  rpc Signup(ReqSignup) returns (Resp) {}
+  rpc VerifyCode(Reqverifycode) returns (Resp) {}
+  rpc Userinfo(ReqUserinfo) returns(Resp){}
 }

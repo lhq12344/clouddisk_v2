@@ -71,6 +71,28 @@ struct ReqverifycodeDefaultTypeInternal {
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ReqverifycodeDefaultTypeInternal _Reqverifycode_default_instance_;
 
+inline constexpr ReqUserinfo::Impl_::Impl_(
+    ::_pbi::ConstantInitialized) noexcept
+      : username_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        id_{0},
+        _cached_size_{0} {}
+
+template <typename>
+PROTOBUF_CONSTEXPR ReqUserinfo::ReqUserinfo(::_pbi::ConstantInitialized)
+    : _impl_(::_pbi::ConstantInitialized()) {}
+struct ReqUserinfoDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR ReqUserinfoDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~ReqUserinfoDefaultTypeInternal() {}
+  union {
+    ReqUserinfo _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ReqUserinfoDefaultTypeInternal _ReqUserinfo_default_instance_;
+
 inline constexpr ReqSignup::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
       : username_(
@@ -170,6 +192,16 @@ const ::uint32_t
         ~0u,  // no sizeof(Split)
         PROTOBUF_FIELD_OFFSET(::account::Reqverifycode, _impl_.email_),
         PROTOBUF_FIELD_OFFSET(::account::Reqverifycode, _impl_.code_),
+        ~0u,  // no _has_bits_
+        PROTOBUF_FIELD_OFFSET(::account::ReqUserinfo, _internal_metadata_),
+        ~0u,  // no _extensions_
+        ~0u,  // no _oneof_case_
+        ~0u,  // no _weak_field_map_
+        ~0u,  // no _inlined_string_donated_
+        ~0u,  // no _split_
+        ~0u,  // no sizeof(Split)
+        PROTOBUF_FIELD_OFFSET(::account::ReqUserinfo, _impl_.id_),
+        PROTOBUF_FIELD_OFFSET(::account::ReqUserinfo, _impl_.username_),
 };
 
 static const ::_pbi::MigrationSchema
@@ -178,12 +210,14 @@ static const ::_pbi::MigrationSchema
         {10, -1, -1, sizeof(::account::Resp)},
         {20, -1, -1, sizeof(::account::ReqSignup)},
         {31, -1, -1, sizeof(::account::Reqverifycode)},
+        {41, -1, -1, sizeof(::account::ReqUserinfo)},
 };
 static const ::_pb::Message* const file_default_instances[] = {
     &::account::_ReqSignin_default_instance_._instance,
     &::account::_Resp_default_instance_._instance,
     &::account::_ReqSignup_default_instance_._instance,
     &::account::_Reqverifycode_default_instance_._instance,
+    &::account::_ReqUserinfo_default_instance_._instance,
 };
 const char descriptor_table_protodef_account_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIABLE(
     protodesc_cold) = {
@@ -192,25 +226,27 @@ const char descriptor_table_protodef_account_2eproto[] ABSL_ATTRIBUTE_SECTION_VA
     "p\022\014\n\004code\030\001 \001(\005\022\017\n\007message\030\002 \001(\t\">\n\tReqS"
     "ignup\022\020\n\010username\030\001 \001(\t\022\020\n\010password\030\002 \001("
     "\t\022\r\n\005email\030\003 \001(\t\",\n\rReqverifycode\022\r\n\005ema"
-    "il\030\001 \001(\t\022\014\n\004code\030\002 \001(\t2\245\001\n\016accountServic"
-    "e\022-\n\006Signin\022\022.account.ReqSignin\032\r.accoun"
-    "t.Resp\"\000\022-\n\006Signup\022\022.account.ReqSignup\032\r"
-    ".account.Resp\"\000\0225\n\nVerifyCode\022\026.account."
-    "Reqverifycode\032\r.account.Resp\"\000B-Z+cloudd"
-    "isk_v2/account_srv/protobuf;accountpbb\006p"
-    "roto3"
+    "il\030\001 \001(\t\022\014\n\004code\030\002 \001(\t\"+\n\013ReqUserinfo\022\n\n"
+    "\002ID\030\001 \001(\005\022\020\n\010username\030\002 \001(\t2\330\001\n\016accountS"
+    "ervice\022-\n\006Signin\022\022.account.ReqSignin\032\r.a"
+    "ccount.Resp\"\000\022-\n\006Signup\022\022.account.ReqSig"
+    "nup\032\r.account.Resp\"\000\0225\n\nVerifyCode\022\026.acc"
+    "ount.Reqverifycode\032\r.account.Resp\"\000\0221\n\010U"
+    "serinfo\022\024.account.ReqUserinfo\032\r.account."
+    "Resp\"\000B-Z+clouddisk_v2/account_srv/proto"
+    "buf;accountpbb\006proto3"
 };
 static ::absl::once_flag descriptor_table_account_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_account_2eproto = {
     false,
     false,
-    445,
+    541,
     descriptor_table_protodef_account_2eproto,
     "account.proto",
     &descriptor_table_account_2eproto_once,
     nullptr,
     0,
-    4,
+    5,
     schemas,
     file_default_instances,
     TableStruct_account_2eproto::offsets,
@@ -1131,6 +1167,225 @@ void Reqverifycode::InternalSwap(Reqverifycode* PROTOBUF_RESTRICT other) {
 }
 
 ::google::protobuf::Metadata Reqverifycode::GetMetadata() const {
+  return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
+}
+// ===================================================================
+
+class ReqUserinfo::_Internal {
+ public:
+};
+
+ReqUserinfo::ReqUserinfo(::google::protobuf::Arena* arena)
+    : ::google::protobuf::Message(arena) {
+  SharedCtor(arena);
+  // @@protoc_insertion_point(arena_constructor:account.ReqUserinfo)
+}
+inline PROTOBUF_NDEBUG_INLINE ReqUserinfo::Impl_::Impl_(
+    ::google::protobuf::internal::InternalVisibility visibility, ::google::protobuf::Arena* arena,
+    const Impl_& from, const ::account::ReqUserinfo& from_msg)
+      : username_(arena, from.username_),
+        _cached_size_{0} {}
+
+ReqUserinfo::ReqUserinfo(
+    ::google::protobuf::Arena* arena,
+    const ReqUserinfo& from)
+    : ::google::protobuf::Message(arena) {
+  ReqUserinfo* const _this = this;
+  (void)_this;
+  _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+  new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+  _impl_.id_ = from._impl_.id_;
+
+  // @@protoc_insertion_point(copy_constructor:account.ReqUserinfo)
+}
+inline PROTOBUF_NDEBUG_INLINE ReqUserinfo::Impl_::Impl_(
+    ::google::protobuf::internal::InternalVisibility visibility,
+    ::google::protobuf::Arena* arena)
+      : username_(arena),
+        _cached_size_{0} {}
+
+inline void ReqUserinfo::SharedCtor(::_pb::Arena* arena) {
+  new (&_impl_) Impl_(internal_visibility(), arena);
+  _impl_.id_ = {};
+}
+ReqUserinfo::~ReqUserinfo() {
+  // @@protoc_insertion_point(destructor:account.ReqUserinfo)
+  _internal_metadata_.Delete<::google::protobuf::UnknownFieldSet>();
+  SharedDtor();
+}
+inline void ReqUserinfo::SharedDtor() {
+  ABSL_DCHECK(GetArena() == nullptr);
+  _impl_.username_.Destroy();
+  _impl_.~Impl_();
+}
+
+const ::google::protobuf::MessageLite::ClassData*
+ReqUserinfo::GetClassData() const {
+  PROTOBUF_CONSTINIT static const ::google::protobuf::MessageLite::
+      ClassDataFull _data_ = {
+          {
+              &_table_.header,
+              nullptr,  // OnDemandRegisterArenaDtor
+              nullptr,  // IsInitialized
+              PROTOBUF_FIELD_OFFSET(ReqUserinfo, _impl_._cached_size_),
+              false,
+          },
+          &ReqUserinfo::MergeImpl,
+          &ReqUserinfo::kDescriptorMethods,
+          &descriptor_table_account_2eproto,
+          nullptr,  // tracker
+      };
+  ::google::protobuf::internal::PrefetchToLocalCache(&_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(_data_.tc_table);
+  return _data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<1, 2, 0, 36, 2> ReqUserinfo::_table_ = {
+  {
+    0,  // no _has_bits_
+    0, // no _extensions_
+    2, 8,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4294967292,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    2,  // num_field_entries
+    0,  // num_aux_entries
+    offsetof(decltype(_table_), field_names),  // no aux_entries
+    &_ReqUserinfo_default_instance_._instance,
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::GenericFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::account::ReqUserinfo>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    // string username = 2;
+    {::_pbi::TcParser::FastUS1,
+     {18, 63, 0, PROTOBUF_FIELD_OFFSET(ReqUserinfo, _impl_.username_)}},
+    // int32 ID = 1;
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(ReqUserinfo, _impl_.id_), 63>(),
+     {8, 63, 0, PROTOBUF_FIELD_OFFSET(ReqUserinfo, _impl_.id_)}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // int32 ID = 1;
+    {PROTOBUF_FIELD_OFFSET(ReqUserinfo, _impl_.id_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kInt32)},
+    // string username = 2;
+    {PROTOBUF_FIELD_OFFSET(ReqUserinfo, _impl_.username_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+  }},
+  // no aux_entries
+  {{
+    "\23\0\10\0\0\0\0\0"
+    "account.ReqUserinfo"
+    "username"
+  }},
+};
+
+PROTOBUF_NOINLINE void ReqUserinfo::Clear() {
+// @@protoc_insertion_point(message_clear_start:account.ReqUserinfo)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.username_.ClearToEmpty();
+  _impl_.id_ = 0;
+  _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
+}
+
+::uint8_t* ReqUserinfo::_InternalSerialize(
+    ::uint8_t* target,
+    ::google::protobuf::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:account.ReqUserinfo)
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  // int32 ID = 1;
+  if (this->_internal_id() != 0) {
+    target = ::google::protobuf::internal::WireFormatLite::
+        WriteInt32ToArrayWithField<1>(
+            stream, this->_internal_id(), target);
+  }
+
+  // string username = 2;
+  if (!this->_internal_username().empty()) {
+    const std::string& _s = this->_internal_username();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "account.ReqUserinfo.username");
+    target = stream->WriteStringMaybeAliased(2, _s, target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target =
+        ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+            _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:account.ReqUserinfo)
+  return target;
+}
+
+::size_t ReqUserinfo::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:account.ReqUserinfo)
+  ::size_t total_size = 0;
+
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  ::_pbi::Prefetch5LinesFrom7Lines(reinterpret_cast<const void*>(this));
+  // string username = 2;
+  if (!this->_internal_username().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_username());
+  }
+
+  // int32 ID = 1;
+  if (this->_internal_id() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(
+        this->_internal_id());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+
+void ReqUserinfo::MergeImpl(::google::protobuf::MessageLite& to_msg, const ::google::protobuf::MessageLite& from_msg) {
+  auto* const _this = static_cast<ReqUserinfo*>(&to_msg);
+  auto& from = static_cast<const ReqUserinfo&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:account.ReqUserinfo)
+  ABSL_DCHECK_NE(&from, _this);
+  ::uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_username().empty()) {
+    _this->_internal_set_username(from._internal_username());
+  }
+  if (from._internal_id() != 0) {
+    _this->_impl_.id_ = from._impl_.id_;
+  }
+  _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void ReqUserinfo::CopyFrom(const ReqUserinfo& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:account.ReqUserinfo)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+
+void ReqUserinfo::InternalSwap(ReqUserinfo* PROTOBUF_RESTRICT other) {
+  using std::swap;
+  auto* arena = GetArena();
+  ABSL_DCHECK_EQ(arena, other->GetArena());
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.username_, &other->_impl_.username_, arena);
+        swap(_impl_.id_, other->_impl_.id_);
+}
+
+::google::protobuf::Metadata ReqUserinfo::GetMetadata() const {
   return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
 }
 // @@protoc_insertion_point(namespace_scope)

@@ -1,34 +1,48 @@
 #include "AccountController.h"
 
-std::shared_ptr<account::accountService::Stub> AccountController::FindService(const std::string &key) const
+bool isChannelReady(std::shared_ptr<grpc::Channel> channel)
 {
-	// 1. 从配置读取 Consul 地址
+	grpc_connectivity_state state =
+		channel->GetState(/*try_to_connect=*/false);
+
+	return state == GRPC_CHANNEL_READY;
+}
+
+std::shared_ptr<account::accountService::Stub>
+AccountController::FindService(const std::string &key) const
+{
+	ServiceInstance value;
+
+	// 1. 尝试从缓存取
+	if (cache_.get(key, value))
+	{
+		if (value.channel && isChannelReady(value.channel))
+		{
+			LOG_INFO("[ARC] HIT key = {}, addr = {}:{}", key, value.address, value.port);
+			return value.stub; // ✔缓存有效
+		}
+		LOG_INFO("[ARC] MISS key = {}", key);
+	}
+	// 2. 未命中缓存 → 去 Consul 查询
 	std::string host = MyAppData::instance().consulHost;
 	int port = MyAppData::instance().consulPort;
-
-	// 2. 查询 Consul 获取负载均衡后的实例
 	CloudiskConsul consul(host, port);
-	ServiceInstance inst = consul.getRoundRobinInstance(key);
+	value = consul.getRoundRobinInstance(key);
 
-	if (inst.address.empty())
+	if (value.address.empty())
 	{
 		LOG_ERROR("[FindService] No available instance for {}", key);
 		return nullptr;
 	}
+	LOG_INFO("[FindService] Use instance {}:{} for {}", value.address, value.port, key);
 
-	LOG_INFO("[FindService] Use instance {}:{} for {}", inst.address, inst.port, key);
+	// 3. 为当前 address:port 创建唯一的 channel + stub，并放缓存
+	std::string addr = value.address + ":" + std::to_string(value.port);
+	value.channel = grpc::CreateChannel(addr, grpc::InsecureChannelCredentials());
+	value.stub = account::accountService::NewStub(value.channel);
+	cache_.put(key, value); // ← 必须写回缓存
 
-	// 3. 获取或创建 gRPC channel
-	if (!inst.channel)
-	{
-		std::string addr = inst.address + ":" + std::to_string(inst.port);
-		inst.channel = grpc::CreateChannel(addr, grpc::InsecureChannelCredentials());
-		// 注意：这里假设 getRoundRobinInstance 返回的是副本，所以需要重新 put 才能更新缓存中的 channel
-		// 但 getRoundRobinInstance 逻辑可能比较复杂，如果它每次都返回新对象，我们需要确保能更新到缓存
-	}
-
-	// 4. 创建并返回 stub
-	return account::accountService::NewStub(inst.channel);
+	return value.stub;
 }
 
 void AccountController::signup(
@@ -56,8 +70,6 @@ void AccountController::signup(
 	stub->async()->Signup(context.get(), request.get(), response.get(),
 						  [callback, context, request, response](::grpc::Status s)
 						  {
-							  drogon::app().getLoop()->queueInLoop([callback, context, request, response, s]()
-																   {
 							  if (s.ok() && response->code() == 0)
 							  {
 								  Json::Value ret;
@@ -70,15 +82,13 @@ void AccountController::signup(
 							  {
 								  LOG_ERROR("[signup] gRPC Signup failed: {} {}", (int)s.error_code(), s.error_message());
 								  Json::Value ret;
-								  ret["error"] = "Internal Service Error";
+								  ret["error"] = s.error_code();
 								  ret["details"] = s.error_message();
 								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								  resp->setStatusCode(k500InternalServerError);
 								  callback(resp);
 							  } });
-						  });
-}
-
+};
 void AccountController::signin(const drogon::HttpRequestPtr &req,
 							   std::function<void(const drogon::HttpResponsePtr &)> &&callback) const
 {
@@ -103,8 +113,6 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 	stub->async()->Signin(context.get(), request.get(), response.get(),
 						  [callback, context, request, response](::grpc::Status s)
 						  {
-							  drogon::app().getLoop()->queueInLoop([callback, context, request, response, s]()
-																   {
 							  if (s.ok() && response->code() == 0)
 							  {
 								  Json::Value ret;
@@ -118,11 +126,45 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 							  {
 								  LOG_ERROR("[signin] gRPC Signin failed: {} {}", (int)s.error_code(), s.error_message());
 								  Json::Value ret;
-								  ret["error"] = "Internal Service Error";
+								  ret["error"] = s.error_code();
 								  ret["details"] = s.error_message();
 								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								  resp->setStatusCode(k500InternalServerError);
 								  callback(resp);
 							  } });
-						  });
+}
+
+void AccountController::userinfo(const HttpRequestPtr &req,
+								 std::function<void(const HttpResponsePtr &)> &&callback) const
+{
+	auto stub = FindService("account_srv");
+
+	auto context = std::make_shared<::grpc::ClientContext>();
+	auto request = std::make_shared<::account::ReqUserinfo>();
+	auto response = std::make_shared<::account::Resp>();
+
+	request->set_username(req->getAttributes()->get<std::string>("Name"));
+	request->set_id(req->getAttributes()->get<int>("ID"));
+	stub->async()->Userinfo(context.get(), request.get(), response.get(),
+						  [callback, context, request, response](::grpc::Status s)
+						  {
+							  if (s.ok() && response->code() == 0)
+							  {
+								  Json::Value ret;
+								  ret["status"] = "ok";
+								  ret["token"] = response->message();
+								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+								  callback(resp);
+								 
+							  }
+							  else
+							  {
+								  LOG_ERROR("[signin] gRPC Signin failed: {} {}", (int)s.error_code(), s.error_message());
+								  Json::Value ret;
+								  ret["error"] = s.error_code();
+								  ret["details"] = s.error_message();
+								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+								  resp->setStatusCode(k500InternalServerError);
+								  callback(resp);
+							  } });
 }

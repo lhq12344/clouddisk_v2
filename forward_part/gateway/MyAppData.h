@@ -6,6 +6,7 @@ class MyAppData
 public:
 	std::string consulHost;
 	int consulPort;
+	std::string SigningKey;
 	static MyAppData &instance()
 	{
 		static MyAppData d;

@@ -29,10 +29,13 @@ public:
 	// use METHOD_ADD to add your custom processing function here;
 	ADD_METHOD_TO(AccountController::signup, "/user/signup", Post);
 	ADD_METHOD_TO(AccountController::signin, "/user/signin", Post);
+	ADD_METHOD_TO(AccountController::userinfo, "/user/info", Get, "jwt_decode");
 	METHOD_LIST_END
 	// your declaration of processing function maybe like this:
 	void signup(const HttpRequestPtr &req,
 				std::function<void(const HttpResponsePtr &)> &&callback);
 	void signin(const HttpRequestPtr &req,
 				std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void userinfo(const HttpRequestPtr &req,
+				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 };

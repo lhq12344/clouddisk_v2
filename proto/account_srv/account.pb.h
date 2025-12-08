@@ -56,6 +56,9 @@ extern ReqSigninDefaultTypeInternal _ReqSignin_default_instance_;
 class ReqSignup;
 struct ReqSignupDefaultTypeInternal;
 extern ReqSignupDefaultTypeInternal _ReqSignup_default_instance_;
+class ReqUserinfo;
+struct ReqUserinfoDefaultTypeInternal;
+extern ReqUserinfoDefaultTypeInternal _ReqUserinfo_default_instance_;
 class Reqverifycode;
 struct ReqverifycodeDefaultTypeInternal;
 extern ReqverifycodeDefaultTypeInternal _Reqverifycode_default_instance_;
@@ -451,6 +454,195 @@ class Reqverifycode final : public ::google::protobuf::Message
                           const Reqverifycode& from_msg);
     ::google::protobuf::internal::ArenaStringPtr email_;
     ::google::protobuf::internal::ArenaStringPtr code_;
+    mutable ::google::protobuf::internal::CachedSize _cached_size_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_account_2eproto;
+};
+// -------------------------------------------------------------------
+
+class ReqUserinfo final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:account.ReqUserinfo) */ {
+ public:
+  inline ReqUserinfo() : ReqUserinfo(nullptr) {}
+  ~ReqUserinfo() override;
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR ReqUserinfo(
+      ::google::protobuf::internal::ConstantInitialized);
+
+  inline ReqUserinfo(const ReqUserinfo& from) : ReqUserinfo(nullptr, from) {}
+  inline ReqUserinfo(ReqUserinfo&& from) noexcept
+      : ReqUserinfo(nullptr, std::move(from)) {}
+  inline ReqUserinfo& operator=(const ReqUserinfo& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ReqUserinfo& operator=(ReqUserinfo&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetArena() == from.GetArena()
+#ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetArena() != nullptr
+#endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ReqUserinfo& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ReqUserinfo* internal_default_instance() {
+    return reinterpret_cast<const ReqUserinfo*>(
+        &_ReqUserinfo_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 4;
+  friend void swap(ReqUserinfo& a, ReqUserinfo& b) { a.Swap(&b); }
+  inline void Swap(ReqUserinfo* other) {
+    if (other == this) return;
+#ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() != nullptr && GetArena() == other->GetArena()) {
+#else   // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() == other->GetArena()) {
+#endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ReqUserinfo* other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ReqUserinfo* New(::google::protobuf::Arena* arena = nullptr) const final {
+    return ::google::protobuf::Message::DefaultConstruct<ReqUserinfo>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const ReqUserinfo& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const ReqUserinfo& from) { ReqUserinfo::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(
+      ::google::protobuf::MessageLite& to_msg,
+      const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() final;
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* _InternalSerialize(
+      ::uint8_t* target,
+      ::google::protobuf::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* arena);
+  void SharedDtor();
+  void InternalSwap(ReqUserinfo* other);
+ private:
+  friend class ::google::protobuf::internal::AnyMetadata;
+  static ::absl::string_view FullMessageName() { return "account.ReqUserinfo"; }
+
+ protected:
+  explicit ReqUserinfo(::google::protobuf::Arena* arena);
+  ReqUserinfo(::google::protobuf::Arena* arena, const ReqUserinfo& from);
+  ReqUserinfo(::google::protobuf::Arena* arena, ReqUserinfo&& from) noexcept
+      : ReqUserinfo(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::Message::ClassData* GetClassData() const final;
+
+ public:
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kUsernameFieldNumber = 2,
+    kIDFieldNumber = 1,
+  };
+  // string username = 2;
+  void clear_username() ;
+  const std::string& username() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_username(Arg_&& arg, Args_... args);
+  std::string* mutable_username();
+  PROTOBUF_NODISCARD std::string* release_username();
+  void set_allocated_username(std::string* value);
+
+  private:
+  const std::string& _internal_username() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_username(
+      const std::string& value);
+  std::string* _internal_mutable_username();
+
+  public:
+  // int32 ID = 1;
+  void clear_id() ;
+  ::int32_t id() const;
+  void set_id(::int32_t value);
+
+  private:
+  ::int32_t _internal_id() const;
+  void _internal_set_id(::int32_t value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:account.ReqUserinfo)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<
+      1, 2, 0,
+      36, 2>
+      _table_;
+
+  static constexpr const void* _raw_default_instance_ =
+      &_ReqUserinfo_default_instance_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(
+        ::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena);
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena, const Impl_& from,
+                          const ReqUserinfo& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr username_;
+    ::int32_t id_;
     mutable ::google::protobuf::internal::CachedSize _cached_size_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -1314,6 +1506,82 @@ inline void Reqverifycode::set_allocated_code(std::string* value) {
         }
   #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:account.Reqverifycode.code)
+}
+
+// -------------------------------------------------------------------
+
+// ReqUserinfo
+
+// int32 ID = 1;
+inline void ReqUserinfo::clear_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.id_ = 0;
+}
+inline ::int32_t ReqUserinfo::id() const {
+  // @@protoc_insertion_point(field_get:account.ReqUserinfo.ID)
+  return _internal_id();
+}
+inline void ReqUserinfo::set_id(::int32_t value) {
+  _internal_set_id(value);
+  // @@protoc_insertion_point(field_set:account.ReqUserinfo.ID)
+}
+inline ::int32_t ReqUserinfo::_internal_id() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.id_;
+}
+inline void ReqUserinfo::_internal_set_id(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.id_ = value;
+}
+
+// string username = 2;
+inline void ReqUserinfo::clear_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.ClearToEmpty();
+}
+inline const std::string& ReqUserinfo::username() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:account.ReqUserinfo.username)
+  return _internal_username();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqUserinfo::set_username(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:account.ReqUserinfo.username)
+}
+inline std::string* ReqUserinfo::mutable_username() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_username();
+  // @@protoc_insertion_point(field_mutable:account.ReqUserinfo.username)
+  return _s;
+}
+inline const std::string& ReqUserinfo::_internal_username() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.username_.Get();
+}
+inline void ReqUserinfo::_internal_set_username(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.Set(value, GetArena());
+}
+inline std::string* ReqUserinfo::_internal_mutable_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.username_.Mutable( GetArena());
+}
+inline std::string* ReqUserinfo::release_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:account.ReqUserinfo.username)
+  return _impl_.username_.Release();
+}
+inline void ReqUserinfo::set_allocated_username(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.username_.IsDefault()) {
+          _impl_.username_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:account.ReqUserinfo.username)
 }
 
 #ifdef __GNUC__

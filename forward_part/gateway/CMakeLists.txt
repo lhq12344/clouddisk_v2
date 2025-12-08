@@ -29,8 +29,9 @@ add_executable(${PROJECT_NAME} main.cc)
 #
 # and comment out the following lines
 find_package(Drogon CONFIG REQUIRED)
+find_package(Drogon REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
-
+target_link_libraries(gateway PRIVATE Drogon::Drogon)
 # ##############################################################################
 
 # Link protobuf and gRPC for generated stubs used by controllers
@@ -94,6 +95,9 @@ target_include_directories(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME}
                 PRIVATE /usr/local/include/nacos
                         /usr/include/nacos)
+target_include_directories(gateway PRIVATE
+    /home/lihaoqian/Tools/jwt-cpp-master/include
+)
 target_sources(${PROJECT_NAME}
                PRIVATE
                ${SRC_DIR}

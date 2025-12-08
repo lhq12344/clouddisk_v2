@@ -11,6 +11,9 @@
 #include <nlohmann/json.hpp>
 #include <grpcpp/grpcpp.h>
 #include "../logs/Logger.h"
+#include "../../proto/account_srv/account.grpc.pb.h"
+#include "../../proto/account_srv/account.pb.h"
+
 using json = nlohmann::json;
 
 struct ServiceInstance
@@ -18,6 +21,7 @@ struct ServiceInstance
 	std::string address;
 	int port;
 	std::shared_ptr<grpc::Channel> channel;
+	std::shared_ptr<account::accountService::Stub> stub;
 };
 
 class CloudiskConsul

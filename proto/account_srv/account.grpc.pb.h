@@ -56,6 +56,13 @@ class accountService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>> PrepareAsyncVerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>>(PrepareAsyncVerifyCodeRaw(context, request, cq));
     }
+    virtual ::grpc::Status Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::account::Resp* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>> AsyncUserinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>>(AsyncUserinfoRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>> PrepareAsyncUserinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>>(PrepareAsyncUserinfoRaw(context, request, cq));
+    }
     class async_interface {
      public:
       virtual ~async_interface() {}
@@ -65,6 +72,8 @@ class accountService final {
       virtual void Signup(::grpc::ClientContext* context, const ::account::ReqSignup* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
       virtual void VerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode* request, ::account::Resp* response, std::function<void(::grpc::Status)>) = 0;
       virtual void VerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
     };
     typedef class async_interface experimental_async_interface;
     virtual class async_interface* async() { return nullptr; }
@@ -76,6 +85,8 @@ class accountService final {
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>* PrepareAsyncSignupRaw(::grpc::ClientContext* context, const ::account::ReqSignup& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>* AsyncVerifyCodeRaw(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>* PrepareAsyncVerifyCodeRaw(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>* AsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::account::Resp>* PrepareAsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) = 0;
   };
   class Stub final : public StubInterface {
    public:
@@ -101,6 +112,13 @@ class accountService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>> PrepareAsyncVerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>>(PrepareAsyncVerifyCodeRaw(context, request, cq));
     }
+    ::grpc::Status Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::account::Resp* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>> AsyncUserinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>>(AsyncUserinfoRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>> PrepareAsyncUserinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::account::Resp>>(PrepareAsyncUserinfoRaw(context, request, cq));
+    }
     class async final :
       public StubInterface::async_interface {
      public:
@@ -110,6 +128,8 @@ class accountService final {
       void Signup(::grpc::ClientContext* context, const ::account::ReqSignup* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) override;
       void VerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode* request, ::account::Resp* response, std::function<void(::grpc::Status)>) override;
       void VerifyCode(::grpc::ClientContext* context, const ::account::Reqverifycode* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, std::function<void(::grpc::Status)>) override;
+      void Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) override;
      private:
       friend class Stub;
       explicit async(Stub* stub): stub_(stub) { }
@@ -127,9 +147,12 @@ class accountService final {
     ::grpc::ClientAsyncResponseReader< ::account::Resp>* PrepareAsyncSignupRaw(::grpc::ClientContext* context, const ::account::ReqSignup& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::account::Resp>* AsyncVerifyCodeRaw(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::account::Resp>* PrepareAsyncVerifyCodeRaw(::grpc::ClientContext* context, const ::account::Reqverifycode& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::account::Resp>* AsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::account::Resp>* PrepareAsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) override;
     const ::grpc::internal::RpcMethod rpcmethod_Signin_;
     const ::grpc::internal::RpcMethod rpcmethod_Signup_;
     const ::grpc::internal::RpcMethod rpcmethod_VerifyCode_;
+    const ::grpc::internal::RpcMethod rpcmethod_Userinfo_;
   };
   static std::unique_ptr<Stub> NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options = ::grpc::StubOptions());
 
@@ -140,6 +163,7 @@ class accountService final {
     virtual ::grpc::Status Signin(::grpc::ServerContext* context, const ::account::ReqSignin* request, ::account::Resp* response);
     virtual ::grpc::Status Signup(::grpc::ServerContext* context, const ::account::ReqSignup* request, ::account::Resp* response);
     virtual ::grpc::Status VerifyCode(::grpc::ServerContext* context, const ::account::Reqverifycode* request, ::account::Resp* response);
+    virtual ::grpc::Status Userinfo(::grpc::ServerContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response);
   };
   template <class BaseClass>
   class WithAsyncMethod_Signin : public BaseClass {
@@ -201,7 +225,27 @@ class accountService final {
       ::grpc::Service::RequestAsyncUnary(2, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
-  typedef WithAsyncMethod_Signin<WithAsyncMethod_Signup<WithAsyncMethod_VerifyCode<Service > > > AsyncService;
+  template <class BaseClass>
+  class WithAsyncMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_Userinfo() {
+      ::grpc::Service::MarkMethodAsync(3);
+    }
+    ~WithAsyncMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestUserinfo(::grpc::ServerContext* context, ::account::ReqUserinfo* request, ::grpc::ServerAsyncResponseWriter< ::account::Resp>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(3, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  typedef WithAsyncMethod_Signin<WithAsyncMethod_Signup<WithAsyncMethod_VerifyCode<WithAsyncMethod_Userinfo<Service > > > > AsyncService;
   template <class BaseClass>
   class WithCallbackMethod_Signin : public BaseClass {
    private:
@@ -283,7 +327,34 @@ class accountService final {
     virtual ::grpc::ServerUnaryReactor* VerifyCode(
       ::grpc::CallbackServerContext* /*context*/, const ::account::Reqverifycode* /*request*/, ::account::Resp* /*response*/)  { return nullptr; }
   };
-  typedef WithCallbackMethod_Signin<WithCallbackMethod_Signup<WithCallbackMethod_VerifyCode<Service > > > CallbackService;
+  template <class BaseClass>
+  class WithCallbackMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_Userinfo() {
+      ::grpc::Service::MarkMethodCallback(3,
+          new ::grpc::internal::CallbackUnaryHandler< ::account::ReqUserinfo, ::account::Resp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response) { return this->Userinfo(context, request, response); }));}
+    void SetMessageAllocatorFor_Userinfo(
+        ::grpc::MessageAllocator< ::account::ReqUserinfo, ::account::Resp>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(3);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::account::ReqUserinfo, ::account::Resp>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* Userinfo(
+      ::grpc::CallbackServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/)  { return nullptr; }
+  };
+  typedef WithCallbackMethod_Signin<WithCallbackMethod_Signup<WithCallbackMethod_VerifyCode<WithCallbackMethod_Userinfo<Service > > > > CallbackService;
   typedef CallbackService ExperimentalCallbackService;
   template <class BaseClass>
   class WithGenericMethod_Signin : public BaseClass {
@@ -332,6 +403,23 @@ class accountService final {
     }
     // disable synchronous version of this method
     ::grpc::Status VerifyCode(::grpc::ServerContext* /*context*/, const ::account::Reqverifycode* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_Userinfo() {
+      ::grpc::Service::MarkMethodGeneric(3);
+    }
+    ~WithGenericMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
       abort();
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
@@ -394,6 +482,26 @@ class accountService final {
     }
     void RequestVerifyCode(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
       ::grpc::Service::RequestAsyncUnary(2, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_Userinfo() {
+      ::grpc::Service::MarkMethodRaw(3);
+    }
+    ~WithRawMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestUserinfo(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(3, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
   template <class BaseClass>
@@ -460,6 +568,28 @@ class accountService final {
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
     virtual ::grpc::ServerUnaryReactor* VerifyCode(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_Userinfo() {
+      ::grpc::Service::MarkMethodRawCallback(3,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->Userinfo(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* Userinfo(
       ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
   };
   template <class BaseClass>
@@ -543,9 +673,36 @@ class accountService final {
     // replace default version of method with streamed unary
     virtual ::grpc::Status StreamedVerifyCode(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::account::Reqverifycode,::account::Resp>* server_unary_streamer) = 0;
   };
-  typedef WithStreamedUnaryMethod_Signin<WithStreamedUnaryMethod_Signup<WithStreamedUnaryMethod_VerifyCode<Service > > > StreamedUnaryService;
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_Userinfo : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_Userinfo() {
+      ::grpc::Service::MarkMethodStreamed(3,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::account::ReqUserinfo, ::account::Resp>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::account::ReqUserinfo, ::account::Resp>* streamer) {
+                       return this->StreamedUserinfo(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_Userinfo() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status Userinfo(::grpc::ServerContext* /*context*/, const ::account::ReqUserinfo* /*request*/, ::account::Resp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedUserinfo(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::account::ReqUserinfo,::account::Resp>* server_unary_streamer) = 0;
+  };
+  typedef WithStreamedUnaryMethod_Signin<WithStreamedUnaryMethod_Signup<WithStreamedUnaryMethod_VerifyCode<WithStreamedUnaryMethod_Userinfo<Service > > > > StreamedUnaryService;
   typedef Service SplitStreamedService;
-  typedef WithStreamedUnaryMethod_Signin<WithStreamedUnaryMethod_Signup<WithStreamedUnaryMethod_VerifyCode<Service > > > StreamedService;
+  typedef WithStreamedUnaryMethod_Signin<WithStreamedUnaryMethod_Signup<WithStreamedUnaryMethod_VerifyCode<WithStreamedUnaryMethod_Userinfo<Service > > > > StreamedService;
 };
 
 }  // namespace account

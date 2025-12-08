@@ -25,6 +25,7 @@ static const char* accountService_method_names[] = {
   "/account.accountService/Signin",
   "/account.accountService/Signup",
   "/account.accountService/VerifyCode",
+  "/account.accountService/Userinfo",
 };
 
 std::unique_ptr< accountService::Stub> accountService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
@@ -37,6 +38,7 @@ accountService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& cha
   : channel_(channel), rpcmethod_Signin_(accountService_method_names[0], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_Signup_(accountService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_VerifyCode_(accountService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_Userinfo_(accountService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
 
 ::grpc::Status accountService::Stub::Signin(::grpc::ClientContext* context, const ::account::ReqSignin& request, ::account::Resp* response) {
@@ -108,6 +110,29 @@ void accountService::Stub::async::VerifyCode(::grpc::ClientContext* context, con
   return result;
 }
 
+::grpc::Status accountService::Stub::Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::account::Resp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::account::ReqUserinfo, ::account::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_Userinfo_, context, request, response);
+}
+
+void accountService::Stub::async::Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::account::ReqUserinfo, ::account::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_Userinfo_, context, request, response, std::move(f));
+}
+
+void accountService::Stub::async::Userinfo(::grpc::ClientContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_Userinfo_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::account::Resp>* accountService::Stub::PrepareAsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::account::Resp, ::account::ReqUserinfo, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_Userinfo_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::account::Resp>* accountService::Stub::AsyncUserinfoRaw(::grpc::ClientContext* context, const ::account::ReqUserinfo& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncUserinfoRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
 accountService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       accountService_method_names[0],
@@ -139,6 +164,16 @@ accountService::Service::Service() {
              ::account::Resp* resp) {
                return service->VerifyCode(ctx, req, resp);
              }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      accountService_method_names[3],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< accountService::Service, ::account::ReqUserinfo, ::account::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](accountService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::account::ReqUserinfo* req,
+             ::account::Resp* resp) {
+               return service->Userinfo(ctx, req, resp);
+             }, this)));
 }
 
 accountService::Service::~Service() {
@@ -159,6 +194,13 @@ accountService::Service::~Service() {
 }
 
 ::grpc::Status accountService::Service::VerifyCode(::grpc::ServerContext* context, const ::account::Reqverifycode* request, ::account::Resp* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status accountService::Service::Userinfo(::grpc::ServerContext* context, const ::account::ReqUserinfo* request, ::account::Resp* response) {
   (void) context;
   (void) request;
   (void) response;
