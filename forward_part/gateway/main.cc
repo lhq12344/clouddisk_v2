@@ -14,6 +14,9 @@ int main()
 	int consulPort = std::atoi(cfg.consul.port.c_str());
 	std::string kafkaHost = cfg.kafka.host;
 	int kafkaPort = std::atoi(cfg.kafka.port.c_str());
+	std::string redisHost = cfg.redis.host;
+	int redisPort = std::atoi(cfg.redis.port.c_str());
+	drogon::app().createRedisClient(redisHost, redisPort);
 	std::string serviceName = "gateway_srv";
 	std::string serviceId = serviceName + std::to_string(port);
 	ConsulRegister consulRegister(
