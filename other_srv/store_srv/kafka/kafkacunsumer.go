@@ -36,7 +36,7 @@ var currentSession sarama.ConsumerGroupSession
 
 // NewFileUploadConsumer 构造函数，创建消费者处理实例并初始化协程池
 func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadConsumer {
-	//oss
+	// oss
 	accessKeyID := os.Getenv("ALIYUN_ACCESS_KEY_ID")
 	accessKeySecret := os.Getenv("ALIYUN_ACCESS_KEY_SECRET")
 	ossClient, err := ali_oss.NewOSSClient(ali_oss.Endpoint, accessKeyID, accessKeySecret, ali_oss.BucketName)
@@ -45,10 +45,19 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 		return nil
 	}
 
+	storageRoot := os.Getenv("LOCAL_STORAGE_ROOT")
+	if storageRoot == "" {
+		log.Logger.Info("local storage root not configured")
+		return nil
+	}
+	localfile.BasePath = storageRoot
+	localFile := &localfile.LoadFile{}
+
 	c := &FileUploadConsumer{
 		ossClient:   ossClient,
 		workerCount: workerCount,
 		taskCh:      make(chan *sarama.ConsumerMessage, workerCount*2), // 缓冲队列
+		localFile:   localFile,
 	}
 	// 启动 workerCount 个后台协程从队列中消费任务
 	for i := 0; i < workerCount; i++ {
