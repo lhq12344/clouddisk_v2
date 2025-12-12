@@ -13,7 +13,8 @@
 #include "../logs/Logger.h"
 #include "../../proto/account_srv/account.grpc.pb.h"
 #include "../../proto/account_srv/account.pb.h"
-
+#include "../../proto/file_srv/file.grpc.pb.h"
+#include "../../proto/file_srv/file.pb.h"
 using json = nlohmann::json;
 
 struct ServiceInstance
@@ -21,7 +22,8 @@ struct ServiceInstance
 	std::string address;
 	int port;
 	std::shared_ptr<grpc::Channel> channel;
-	std::shared_ptr<account::accountService::Stub> stub;
+	std::shared_ptr<account::accountService::Stub> account_stub;
+	std::shared_ptr<file::fileService::Stub> file_stub;
 };
 
 class CloudiskConsul

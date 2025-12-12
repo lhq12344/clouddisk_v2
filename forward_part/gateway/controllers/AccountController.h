@@ -33,11 +33,6 @@ public:
 	ADD_METHOD_TO(AccountController::verifycode, "/user/code", Post);
 	ADD_METHOD_TO(AccountController::userinfo, "/user/info", Get, "jwt_decode");
 
-	ADD_METHOD_TO(AccountController::userinfo, "/file/query", Post, "jwt_decode");
-	ADD_METHOD_TO(AccountController::userinfo, "/file/upload", Post, "jwt_decode");
-	ADD_METHOD_TO(AccountController::userinfo, "/file/download", Get, "jwt_decode");
-	ADD_METHOD_TO(AccountController::userinfo, "/file/showfile", Get, "jwt_decode");
-	ADD_METHOD_TO(AccountController::userinfo, "/file/ask", Get, "jwt_decode");
 	METHOD_LIST_END
 	// your declaration of processing function maybe like this:
 	void signup(const HttpRequestPtr &req,
@@ -49,5 +44,5 @@ public:
 	void sendcode(const HttpRequestPtr &req,
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void verifycode(const HttpRequestPtr &req,
-				  std::function<void(const HttpResponsePtr &)> &&callback) const;
+					std::function<void(const HttpResponsePtr &)> &&callback) const;
 };

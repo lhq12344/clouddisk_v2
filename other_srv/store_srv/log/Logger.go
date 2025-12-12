@@ -9,38 +9,51 @@ import (
 )
 
 var Logger *zap.Logger
+var Log *zap.SugaredLogger
 
 func init() {
 	var err error
-	Logger, err = NewLogger()
+	Logger, Log, err = NewLogger()
 	if err != nil {
 		panic(err)
 	}
 }
 
 // NewLogger 自动滚动日志（不会无限增大）
-func NewLogger() (*zap.Logger, error) {
-	config := zap.NewProductionEncoderConfig()
-	config.TimeKey = "timestamp"
-
-	jsonEncoder := zapcore.NewJSONEncoder(config)
-
+func NewLogger() (*zap.Logger, *zap.SugaredLogger, error) {
 	// 文件写入器
 	fileWriter := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   "accountHandler.log",
+		Filename:   "storeSrv.log",
 		MaxSize:    50,
 		MaxBackups: 3,
 		MaxAge:     30,
 		Compress:   true,
 	})
 
-	// stdout
-	consoleWriter := zapcore.AddSync(os.Stdout)
+	encoderCfg := zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalColorLevelEncoder, // 彩色日志级别
+		EncodeTime:     zapcore.ISO8601TimeEncoder,       // 时间格式
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+	// 控制台输出
+	consoleEncoder := zapcore.NewConsoleEncoder(encoderCfg)
+
+	// 文件输出为 JSON 格式
+	fileEncoder := zapcore.NewJSONEncoder(encoderCfg)
 
 	core := zapcore.NewTee(
-		zapcore.NewCore(jsonEncoder, fileWriter, zap.InfoLevel),
-		zapcore.NewCore(jsonEncoder, consoleWriter, zap.InfoLevel),
+		zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), zap.DebugLevel),
+		zapcore.NewCore(fileEncoder, fileWriter, zap.InfoLevel),
 	)
-
-	return zap.New(core), nil
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+	sugar := logger.Sugar()
+	return logger, sugar, nil
 }
