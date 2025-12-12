@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
@@ -12,7 +13,6 @@ import (
 	"store_srv/ali_oss"
 	"store_srv/localfile"
 	"store_srv/log"
-	"sync"
 )
 
 // FileMessage 定义Kafka消息的结构体，用于反序列化
@@ -29,13 +29,12 @@ type FileUploadConsumer struct {
 	taskCh      chan *sarama.ConsumerMessage
 	wg          sync.WaitGroup
 	localFile   *localfile.LoadFile
+	cancelFunc  context.CancelFunc
+	mu          sync.Mutex
 }
 
-// currentSession 用于保存当前ConsumerGroupSession，在并发处理中用于标记消息
-var currentSession sarama.ConsumerGroupSession
-
 // NewFileUploadConsumer 构造函数，创建消费者处理实例并初始化协程池
-func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadConsumer {
+func NewFileUploadConsumer(workerCount int) *FileUploadConsumer {
 	//oss
 	accessKeyID := os.Getenv("ALIYUN_ACCESS_KEY_ID")
 	accessKeySecret := os.Getenv("ALIYUN_ACCESS_KEY_SECRET")
@@ -48,40 +47,62 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 	c := &FileUploadConsumer{
 		ossClient:   ossClient,
 		workerCount: workerCount,
-		taskCh:      make(chan *sarama.ConsumerMessage, workerCount*2), // 缓冲队列
-	}
-	// 启动 workerCount 个后台协程从队列中消费任务
-	for i := 0; i < workerCount; i++ {
-		c.wg.Add(1)
-		go func(ctx context.Context) {
-			defer c.wg.Done()
-			for msg := range c.taskCh {
-				// 处理消息并上传OSS
-				c.processMessage(msg)
-				// 标记消息已处理，用于提交偏移量
-				// （MarkMessage是并发安全的，可在协程中调用）
-				// 注意：只有在确认消息处理完成且无需重试时才标记
-				// 若处理失败可选择不标记以使Kafka稍后重新投递
-				if currentSession != nil {
-					currentSession.MarkMessage(msg, "")
-				}
-			}
-		}(ctx)
 	}
 	return c
 }
 
 // Setup 在新的会话开始时调用（如平衡分区后）
 func (c *FileUploadConsumer) Setup(session sarama.ConsumerGroupSession) error {
-	currentSession = session // 保存当前会话，供并发协程使用
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	taskCh := make(chan *sarama.ConsumerMessage, c.workerCount*2) // 缓冲队列
+	c.taskCh = taskCh
+
+	workerCtx, cancel := context.WithCancel(context.Background())
+	c.cancelFunc = cancel
+
+	// 启动 workerCount 个后台协程从队列中消费任务
+	for i := 0; i < c.workerCount; i++ {
+		c.wg.Add(1)
+		go func(ctx context.Context, s sarama.ConsumerGroupSession) {
+			defer c.wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg, ok := <-taskCh:
+					if !ok {
+						return
+					}
+					// 处理消息并上传OSS
+					c.processMessage(msg)
+					// 标记消息已处理，用于提交偏移量
+					// （MarkMessage是并发安全的，可在协程中调用）
+					// 注意：只有在确认消息处理完成且无需重试时才标记
+					// 若处理失败可选择不标记以使Kafka稍后重新投递
+					s.MarkMessage(msg, "")
+				}
+			}
+		}(workerCtx, session)
+	}
 	log.Logger.Info("Consumer session setup")
 	return nil
 }
 
 // Cleanup 在会话结束时调用（如发生再均衡前）
 func (c *FileUploadConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
+	c.mu.Lock()
+	if c.cancelFunc != nil {
+		c.cancelFunc()
+		c.cancelFunc = nil
+	}
 	// 关闭任务通道，停止接受新任务
-	close(c.taskCh)
+	if c.taskCh != nil {
+		close(c.taskCh)
+		c.taskCh = nil
+	}
+	c.mu.Unlock()
 	// 等待正在处理的任务完成
 	c.wg.Wait()
 	log.Logger.Info("Consumer session cleanup, all pending tasks done.")
