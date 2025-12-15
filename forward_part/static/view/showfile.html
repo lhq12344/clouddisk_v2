@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>文件展示 + AI 分析</title>
+  <script src="http://libs.baidu.com/jquery/2.0.0/jquery.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.3.7/dist/css/bootstrap.min.css" />
+  <style>
+    body { padding: 20px; }
+    #fileinfo {
+      white-space: pre-wrap;
+      background: #f8f8f8;
+      padding: 10px;
+      border-radius: 4px;
+      border: 1px solid #e6e6e6;
+      height: 800px;              /* 固定高度 */
+      overflow-y: auto;           /* 垂直滚动条 */
+      overflow-x: auto;           /* 必要时横向滚动 */
+      word-break: break-word;     /* 长单词/长哈希换行 */
+      overflow-wrap: anywhere;    /* 兼容更多换行行为 */
+    }
+    .spinner { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+    .q-chip { display:inline-block; margin: 3px 6px 0 0; padding: 4px 8px; border-radius: 16px; background:#eef2f7; cursor:pointer; }
+    .q-chip:hover { background:#e3e8f0; }
+    .answer-area {
+      background:#fafafa;
+      border:1px solid #eee;
+      border-radius:4px;
+      padding:10px;
+      min-height:80px;
+      height:320px;      /* 固定高度，便于滚动 */
+      max-height:80vh;   /* 防止过高 */
+      overflow-y:auto;   /* 竖向滚动 */
+      overflow-x:auto;   /* 横向溢出时滚动 */
+      word-break:break-word;
+      white-space:pre-wrap;
+    }
+    .muted { color:#888; }
+    .wrap { word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div class="container-fluid">
+    <div class="row">
+      <!-- 左侧：原文件展示 -->
+      <div class="col-sm-6">
+        <h3>文件展示</h3>
+        <div class="well">
+          <p>文件 Hash：<span id="filehash" style="font-weight:bold;color:teal"></span></p>
+          <p>更多文件信息如下（来自后端 <code>/user/showfile</code>）：</p>
+          <div id="fileinfo"></div>
+          <div class="clearfix" style="margin-top:10px;">
+            <button class="btn btn-default" id="back">返回</button>
+            <button class="btn btn-info" id="quick-analyze" style="margin-left:8px;">一键AI分析</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：AI 分析与问答 -->
+      <div class="col-sm-6">
+        <h3>AI 分析与问答</h3>
+        <div class="panel panel-default">
+          <div class="panel-heading">上下文（将把 <code>resp.data</code> 传给模型）</div>
+          <div class="panel-body">
+            <div class="checkbox">
+              <label>
+                <input type="checkbox" id="send-raw-json" checked /> 连同原始 JSON 一并发送（推荐）
+              </label>
+            </div>
+            <div class="muted">大小提示：当前 JSON 文本长度 <span id="json-size">0</span> 字符。</div>
+          </div>
+        </div>
+
+        <div class="panel panel-primary">
+          <div class="panel-heading">提问</div>
+          <div class="panel-body">
+            <div>
+              <div id="suggestions" style="margin-bottom:8px;"></div>
+              <textarea id="user-question" class="form-control" rows="4" placeholder="在此输入你的问题，例如：请根据数据总结要点、找出异常、解释各字段含义、生成报告摘要等"></textarea>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <div class="col-xs-8">
+                <input id="system-instruction" class="form-control" placeholder="系统指令（可选）：例如 ‘请用中文回答，精炼要点列表’"/>
+              </div>
+              <div class="col-xs-4 text-right">
+                <button id="ask" class="btn btn-primary" style="width:100%">发送到AI</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel panel-default">
+          <div class="panel-heading">AI 回复</div>
+          <div class="panel-body answer-area" id="ai-answer">
+            <span class="muted">尚无回答。</span>
+          </div>
+        </div>
+
+        <div class="alert alert-info">
+          <strong>说明：</strong> 本页面仅负责把 <code>resp.data</code> 与你的问题发送到后端 <code>/ai/ask</code>。请在后端实现实际的模型调用（如 OpenAI、阿里百炼、智谱、Ollama、本地模型等）。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ====== 配置区域（根据你的后端实际情况修改）======
+    var AI_ENDPOINT = '/ai/ask'; // 期望的后端AI接口
+    // 期望后端返回：{ ok: true, answer: "...", tokens: 123, model: "..." } 或者 直接是字符串答案
+
+    // ====== 页面状态 ======
+    var lastParams = {};         // URL 查询参数
+    var lastRespRaw = null;      // /user/showfile 返回的原始对象
+    var lastData = null;         // resp.data（优先）或整个 resp
+
+    function getQueryParams() {
+      var params = {}; var qs = window.location.search.substring(1);
+      if (!qs) return params; var parts = qs.split('&');
+      for (var i = 0; i < parts.length; i++) {
+        var kv = parts[i].split('=');
+        if (kv.length === 2) { params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1]); }
+      }
+      return params;
+    }
+
+    function renderSuggestions(data) {
+      var el = $('#suggestions').empty();
+      var chips = [
+        '请用要点总结这份数据的核心信息',
+        '找出可能的异常值/缺失字段并解释原因',
+        '用表格列出每个关键字段及其含义',
+        '根据该数据生成一段对外汇报摘要（100-200字）',
+        '给出三条可执行的改进建议',
+      ];
+      chips.forEach(function(t){
+        $('<span class="q-chip"></span>').text(t).appendTo(el).click(function(){
+          $('#user-question').val(t).focus();
+        });
+      });
+    }
+
+    function sizeOfJSON(obj){
+      try { return JSON.stringify(obj).length; } catch(e){ return 0; }
+    }
+
+    function setAnswer(html){
+      $('#ai-answer').html('<div class="wrap">'+ html +'</div>');
+    }
+
+    function setLoading(isLoading){
+      if (isLoading) {
+        setAnswer('<span class="spinner glyphicon glyphicon-refresh"></span> 正在向AI提问…');
+        $('#ask').prop('disabled', true);
+      } else {
+        $('#ask').prop('disabled', false);
+      }
+    }
+
+    // 调用后端 AI
+    function callAI(question, options) {
+      options = options || {};
+      var payload = {
+        question: question || '',
+        context: options.context || null,
+        system: options.system || '',
+        // 可加入更多控制参数：temperature, top_p, max_tokens 等
+      };
+      return $.ajax({
+        url: AI_ENDPOINT,
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(payload),
+        timeout: 60000
+      }).then(function(res){
+        // 兼容不同返回格式
+        if (typeof res === 'string') return { ok: true, answer: res };
+        if (res && (res.answer || res.text || res.output)) {
+          return { ok: true, answer: res.answer || res.text || res.output, meta: res };
+        }
+        return { ok: false, error: 'AI 接口未返回可识别字段', raw: res };
+      }, function(xhr){
+        var msg = (xhr && xhr.responseText) ? xhr.responseText : (xhr.status + ' ' + xhr.statusText);
+        return { ok: false, error: 'AI 请求失败：' + msg };
+      });
+    }
+
+    // 一键分析：自动生成系统提示并把 JSON 发给模型
+    function quickAnalyze(){
+      if (!lastData) {
+        setAnswer('<span class="text-danger">暂无可分析的数据（尚未成功获取 /user/showfile 返回）。</span>');
+        return;
+      }
+      var sys = '你是一个严谨的数据分析助手。请基于给定的 JSON 数据：' +
+        '1) 用要点总结关键信息；2) 列出关键字段及含义或示例；3) 指出异常/缺失/可疑点；' +
+        '4) 给出3条可执行的建议；5) 最后给出一个不超过120字的高层摘要。请用中文输出。';
+      var q = '请对这份 JSON 数据进行全面分析。';
+      var contextToSend = $('#send-raw-json').is(':checked') ? lastData : null;
+      setLoading(true);
+      callAI(q, { context: contextToSend, system: sys }).then(function(r){
+        setLoading(false);
+        if (r.ok) setAnswer(r.answer.replace(/\n/g,'<br/>'));
+        else setAnswer('<span class="text-danger">'+ (r.error || '分析失败') +'</span>');
+      });
+    }
+
+    $(function(){
+      // 读取参数
+      lastParams = getQueryParams();
+      if (lastParams.filehash) { $('#filehash').text(lastParams.filehash); } else { $('#filehash').text('(未提供)'); }
+
+      // 初始建议
+      renderSuggestions();
+
+      // 请求 /user/showfile
+      if (lastParams.filehash) {
+        $.ajax({
+          url: '/user/showfile',
+          type: 'POST',
+          data: lastParams,
+          timeout: 10000,
+          success: function(body) {
+            var resp = body;
+            try { if (typeof body === 'string') resp = JSON.parse(body); } catch (e) {
+              $('#fileinfo').text('非 JSON 响应:\n' + body);
+              lastRespRaw = body; lastData = body;
+              $('#json-size').text((body || '').length);
+              return;
+            }
+
+            // 兼容 { status/code, data } 或直接对象
+            var display = '';
+            if (resp && (resp.status || resp.code)) {
+              if (resp.data) { display = JSON.stringify(resp.data, null, 2); lastData = resp.data; }
+              else { display = JSON.stringify(resp, null, 2); lastData = resp; }
+            } else {
+              display = JSON.stringify(resp, null, 2); lastData = resp;
+            }
+            lastRespRaw = resp;
+            $('#fileinfo').text(display);
+            $('#json-size').text(sizeOfJSON(lastData));
+          },
+          error: function(jqXHR, textStatus) {
+            var msg = '请求失败: ' + textStatus;
+            if (jqXHR && jqXHR.responseText) msg += '\n' + jqXHR.responseText;
+            $('#fileinfo').text(msg);
+            lastRespRaw = msg; lastData = msg;
+            $('#json-size').text((msg || '').length);
+          }
+        });
+      }
+
+      // 返回按钮
+      $('#back').click(function(){
+        var returnUrl = '/static/view/home.html';
+        var q = [];
+        for (var k in lastParams) { if (k !== 'filehash') q.push(encodeURIComponent(k) + '=' + encodeURIComponent(lastParams[k])); }
+        if (q.length > 0) returnUrl += '?' + q.join('&');
+        window.location.href = returnUrl;
+      });
+
+      // 一键分析
+      $('#quick-analyze').click(quickAnalyze);
+
+      // 发送问题
+      $('#ask').click(function(){
+        var question = ($('#user-question').val() || '').trim();
+        var system = ($('#system-instruction').val() || '').trim();
+        if (!question) { $('#user-question').focus(); return; }
+        var contextToSend = $('#send-raw-json').is(':checked') ? lastData : null;
+        setLoading(true);
+        callAI(question, { context: contextToSend, system: system }).then(function(r){
+          setLoading(false);
+          if (r.ok) setAnswer(r.answer.replace(/\n/g,'<br/>'));
+          else setAnswer('<span class="text-danger">'+ (r.error || '提问失败') +'</span>');
+        });
+      });
+    });
+  </script>
+</body>
+</html>

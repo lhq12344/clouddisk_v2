@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+
+package file;
+option go_package = "clouddisk_v2/file_srv/protobuf;filepb";
+
+
+
+message ReqFileDown {
+  string username  = 1;
+  string userid    = 2;
+  string filename  = 3;
+  string filehash  = 4;
+  int32  file_size = 5;
+}
+
+message FileInfo {
+  string file_hash    = 1;
+  string file_name    = 2;
+  int64  file_sizes   = 3;
+  string upload_at    = 4;
+  string last_updated = 5;
+}
+
+message ReqFileQuery {
+  string username = 1;
+  string userid   = 2;
+}
+
+message RespFileQuery {
+  int32             code    = 1;
+  string            message = 2;
+  repeated FileInfo files   = 3;
+}
+
+message Reqloadfile {
+  string username  = 1;
+  string userid    = 2;
+  string filename  = 3;
+  bytes  content   = 4;
+  string file_hash = 5;
+  int32  file_size = 6;
+}
+
+
+message Reqshowfile  {
+  string username  = 1;
+  string userid    = 2;
+  string filename  = 3;
+  string filehash  = 4;
+  int32  file_size = 5;
+}
+message Resp {
+  int32  code    = 1;
+  string message = 2;
+}
+
+
+service fileService {
+  rpc filedowm(ReqFileDown) returns (Resp) {}
+  rpc LoadFile(Reqloadfile) returns (Resp) {}
+  rpc Showfile(Reqshowfile) returns (Resp ) {}
+  rpc filequeryinfo(ReqFileQuery) returns (RespFileQuery) {}
+}
+

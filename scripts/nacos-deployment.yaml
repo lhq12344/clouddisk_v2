@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nacos
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nacos
+  template:
+    metadata:
+      labels:
+        app: nacos
+    spec:
+      containers:
+        - name: nacos
+          image: nacos/nacos-server:v3.1.0
+          imagePullPolicy: Never
+          env:
+            - name: MODE
+              value: "standalone"
+            - name: SPRING_DATASOURCE_PLATFORM
+              value: "mysql"
+
+            # 你的 MySQL 配置，根据实际情况修改
+            - name: MYSQL_SERVICE_HOST
+              value: "mysql-svc.infra.svc"
+            - name: MYSQL_SERVICE_PORT
+              value: "3306"
+            - name: MYSQL_SERVICE_DB_NAME
+              value: "nacos_config"
+            - name: MYSQL_SERVICE_USER
+              value: "root"
+            - name: MYSQL_SERVICE_PASSWORD
+              value: "123456"
+
+            # JVM 内存可加可不加（推荐加）
+            - name: JVM_XMS
+              value: "512m"
+            - name: JVM_XMX
+              value: "512m"
+
+            ## ===== VERY IMPORTANT =====
+            - name: NACOS_AUTH_ENABLE
+              value: "true"
+            - name: NACOS_AUTH_TOKEN
+              value: "RPJpczNwUH/rzXSfqbMpEuWWl02qYUsFEhpFESCu5A8="
+            - name: NACOS_AUTH_IDENTITY_KEY
+              value: "serverIdentity"
+            - name: NACOS_AUTH_IDENTITY_VALUE
+              value: "cloudDisk2025"
+
+          ports:
+            - containerPort: 8848
+            - containerPort: 9848
+
+          volumeMounts:
+            - name: nacos-data
+              mountPath: /home/nacos/data
+
+      volumes:
+        - name: nacos-data
+          persistentVolumeClaim:
+            claimName: nacos-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nacos-data
+  namespace: infra
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-storage
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos
+  namespace: infra
+spec:
+  type: NodePort
+  ports:
+    - name: server
+      port: 8848
+      targetPort: 8848
+      nodePort: 30848   # 访问：http://nodeIP:30848/nacos
+
+    - name: console
+      port: 8080
+      targetPort: 8080
+      nodePort: 30880
+
+    - name: grpc
+      port: 9848
+      targetPort: 9848
+      nodePort: 31848
+
+  selector:
+    app: nacos

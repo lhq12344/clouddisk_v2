@@ -1,0 +1,36 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go build
+bin/
+build/
+dist/
+
+# Vendor (if using go mod vendor)
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+tmp/
+<<<<<<< HEAD
+=======
+
+# Nacos local cache & logs
+other_srv/store_srv/log/other_srv/store_srv/log/
+>>>>>>> d5a51f9 (chore: ignore nacos log/cache directory)
+other_srv/store_srv/log/
