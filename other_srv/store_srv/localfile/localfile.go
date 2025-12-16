@@ -17,13 +17,14 @@ func (f *LoadFile) FileExists(path string) bool {
 	return err == nil
 }
 
-func (f *LoadFile) PathForSha1(hash string) string {
-	dir1 := hash[0:2]
+func (f *LoadFile) PathForSha1(hash string) (string, error) {
+	if len(hash) < 4 {
+		return "", fmt.Errorf("invalid sha1: %q", hash)
+	}
+	dir1 := hash[:2]
 	dir2 := hash[2:4]
 	dirPath := filepath.Join(BasePath, dir1, dir2)
-	// 组合完整文件路径，使用哈希字符串作为文件名
-	Path := filepath.Join(dirPath, hash)
-	return Path
+	return filepath.Join(dirPath, hash), nil
 }
 
 // SaveFile 将数据保存为文件，文件名为 data 的 SHA1 哈希。返回保存的文件路径。

@@ -157,6 +157,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 	{
 		Json::Value ret;
 		ret["error"] = "service_unavailable";
+
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k503ServiceUnavailable);
 		callback(resp);
@@ -184,6 +185,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k400BadRequest);
 		callback(resp);
+		LOG_ERROR("[filedowm] invalid JSON in request");
 		return;
 	}
 	request->set_filename((*jsonPtr)["filename"].asString());
@@ -214,7 +216,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 								{
 								case 0: // nginx/local
 								{
-									downloadURL = "http://192.168.149.128:2025/download" +
+									downloadURL = "http://192.168.149.128:2025/download/" +
 												  response->message() +
 												  "?filename=" + url_encode(request->filename());
 
@@ -222,6 +224,9 @@ void FileController::filedowm(const HttpRequestPtr &req,
 									resp->setStatusCode(drogon::k302Found);
 									resp->addHeader("Location", downloadURL);
 									callback(resp);
+									LOG_INFO("[filedowm] user:{} find {} download file local/nginx url {}",
+											 request->username(), request->filename(), downloadURL);
+
 									break;
 								}
 								case 1: // oss signed url
@@ -231,6 +236,8 @@ void FileController::filedowm(const HttpRequestPtr &req,
 									resp->setStatusCode(drogon::k302Found);
 									resp->addHeader("Location", downloadURL);
 									callback(resp);
+									LOG_INFO("[filedowm] user:{} find {} download file oss signed url {}",
+											 request->username(), request->filename(), downloadURL);
 									break;
 								}
 								default:
@@ -240,6 +247,8 @@ void FileController::filedowm(const HttpRequestPtr &req,
 									ret["code"] = response->code();
 									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									resp->setStatusCode(drogon::k400BadRequest);
+									LOG_INFO("[filedowm] user:{} find {} download file failure",
+											 request->username(), request->filename());
 									callback(resp);
 									break;
 								}
@@ -349,6 +358,7 @@ void FileController::Showfile(const HttpRequestPtr &req,
 		ret["error"] = "invalid_json";
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k400BadRequest);
+		LOG_ERROR("[Showfile] invalid JSON in request");
 		callback(resp);
 		return;
 	}
@@ -371,6 +381,8 @@ void FileController::Showfile(const HttpRequestPtr &req,
 									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									resp->setStatusCode(drogon::k500InternalServerError);
 									callback(resp);
+									LOG_INFO("[Showfile] user:{} find {} show file failed",
+											 request->username(), request->filename());
 									return;
 								}
 
@@ -381,13 +393,15 @@ void FileController::Showfile(const HttpRequestPtr &req,
 								case 0: // local preview via nginx
 								{
 									const std::string path = response->message();
-									previewURL = "http://192.168.149.128:2025/preview" + path +
+									previewURL = "http://192.168.149.128:2025/preview/" + path +
 												 "?filename=" + url_encode(request->filename());
 
 									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k302Found); // 临时跳转更合适
+									resp->setStatusCode(drogon::k303SeeOther); // 临时跳转更合适
 									resp->addHeader("Location", previewURL);
 									callback(resp);
+									LOG_INFO("[Showfile] user:{} find {} show file local/nginx url{}",
+											 request->username(), request->filename(), previewURL);
 									break;
 								}
 								case 1: // oss inline signed url
@@ -396,9 +410,11 @@ void FileController::Showfile(const HttpRequestPtr &req,
 									previewURL = response->message();
 
 									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k302Found);
+									resp->setStatusCode(drogon::k303SeeOther);
 									resp->addHeader("Location", previewURL);
 									callback(resp);
+									LOG_INFO("[Showfile] user:{} find {} show file oss signed url url{}",
+											 request->username(), request->filename(), previewURL);
 									break;
 								}
 								default:
@@ -409,6 +425,8 @@ void FileController::Showfile(const HttpRequestPtr &req,
 									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									resp->setStatusCode(drogon::k400BadRequest);
 									callback(resp);
+									LOG_INFO("[Showfile] user:{} find {} show file failure",
+											 request->username(), request->filename());
 									break;
 								}
 								}

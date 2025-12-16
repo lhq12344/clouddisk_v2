@@ -25,9 +25,9 @@ func NewOSSClient(endpoint, accessKeyID, accessKeySecret, bucketName string) (*O
 }
 
 // UploadFile 将本地路径localPath的文件上传到OSS指定对象键objectKey
-func (c *OSSClient) UploadFile(localPath string, objectKey string) error {
+func (c *OSSClient) UploadFile(localPath string, objectKey string, contentType string) error {
 	return c.Bucket.UploadFile(objectKey, localPath, 1*1024*1024,
-		oss.Routines(3), oss.Checkpoint(true, "./checkpoint"))
+		oss.Routines(3), oss.Checkpoint(true, "./checkpoint"), oss.ContentType(contentType))
 }
 
 // UploadBytes 将内存中的字节数据data上传为OSS上的对象objectKey

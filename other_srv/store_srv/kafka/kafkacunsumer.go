@@ -20,6 +20,7 @@ type FileMessage struct {
 	Sha1    string `json:"sha1"`
 	Size    int64  `json:"size"`
 	Content []byte `json:"content"` // 假设content以字节数组形式传递
+	Type    string `json:"type"`
 }
 
 // FileUploadConsumer 文件上传消费者，实现在ConsumerGroupHandler接口
@@ -126,7 +127,11 @@ func (c *FileUploadConsumer) processMessage(msg *sarama.ConsumerMessage) {
 		return
 	}
 	// 构造本地缓存文件路径（使用文件sha1作为文件名）
-	filePath := c.localFile.PathForSha1(fileMsg.Sha1)
+	filePath, err := c.localFile.PathForSha1(fileMsg.Sha1)
+	if err != nil {
+		log.Logger.Info("Failed to get file path")
+		return
+	}
 	// 检查本地缓存是否已有该文件
 	fileExists := c.localFile.FileExists(filePath)
 	// 检查OSS中是否已存在该对象
@@ -166,7 +171,7 @@ func (c *FileUploadConsumer) processMessage(msg *sarama.ConsumerMessage) {
 	if !ossExists {
 		switch fileMsg.Code {
 		case 0: //上传服务
-			if err := c.ossClient.UploadFile(filePath, fileMsg.Sha1); err != nil {
+			if err := c.ossClient.UploadFile(filePath, fileMsg.Sha1, fileMsg.Type); err != nil {
 				log.Logger.Info("Failed to upload to OSS",
 					zap.String("filepath", filePath),
 					zap.String("error", err.Error()))

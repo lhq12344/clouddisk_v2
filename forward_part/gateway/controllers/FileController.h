@@ -27,9 +27,9 @@ public:
 	METHOD_LIST_BEGIN
 	// use METHOD_ADD to add your custom processing function here;
 	ADD_METHOD_TO(FileController::filequeryinfo, "/file/query", Post, "jwt_decode");
-	ADD_METHOD_TO(FileController::filedowm, "/file/download", Get, "jwt_decode");
+	ADD_METHOD_TO(FileController::filedowm, "/file/download", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
-	ADD_METHOD_TO(FileController::Showfile, "/file/showfile", Get, "jwt_decode");
+	ADD_METHOD_TO(FileController::Showfile, "/file/showfile", Post, "jwt_decode");
 	METHOD_LIST_END
 
 	void filequeryinfo(const HttpRequestPtr &req,
