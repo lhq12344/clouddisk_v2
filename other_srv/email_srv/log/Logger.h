@@ -12,7 +12,7 @@ public:
 	static std::shared_ptr<spdlog::logger> get();
 
 	// 初始化（可调用一次，不调用则使用默认）
-	static void init(const std::string &filename = "/home/lihaoqian/myproject/clouddisk_v2/forward_part/logs/app.log",
+	static void init(const std::string &filename = "/home/lihaoqian/myproject/clouddisk_v2/forward_part/logs/email_srv.log",
 					 size_t max_size = 10 * 1024 * 1024,
 					 size_t max_files = 3,
 					 bool async_mode = false);

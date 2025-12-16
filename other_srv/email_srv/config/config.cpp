@@ -51,7 +51,7 @@ void InitAppConfig()
 	// 1. 创建 Properties
 	Properties props;
 	props[PropertyKeyConst::SERVER_ADDR] = "192.168.149.128:30848";
-	props[PropertyKeyConst::NAMESPACE] = "0d83a21b-0039-4f50-9e53-4a7fd3e5d22e";
+	props[PropertyKeyConst::NAMESPACE] = "ce99961c-0fcf-4f4f-81d6-ac2183f24df1";
 	props[PropertyKeyConst::AUTH_USERNAME] = "nacos";
 	props[PropertyKeyConst::AUTH_PASSWORD] = "nacos";
 	// 2. 正确的工厂（旧版 API）
