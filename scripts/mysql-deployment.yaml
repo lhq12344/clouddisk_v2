@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: mysql
-          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:5.7
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/gcr.io/ml-pipeline/mysql:8.0.26
           imagePullPolicy: Never
           args:
             - "--default-authentication-plugin=mysql_native_password"

@@ -2,7 +2,7 @@ package internal
 
 import (
 	"bytes"
-	"go_test/log"
+	"go_test/other_srv/store_srv/log"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"

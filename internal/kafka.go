@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go_test/log"
+	"go_test/other_srv/store_srv/log"
 
 	"github.com/IBM/sarama"
 )

@@ -3,35 +3,54 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"fmt"
+	"go_test/backword_part/model"
+	"go_test/internal"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
-	"store_srv/ali_oss"
-	"store_srv/localfile"
-	"store_srv/log"
+	"go_test/other_srv/store_srv/ali_oss"
+	"go_test/other_srv/store_srv/localfile"
+	"go_test/other_srv/store_srv/log"
 	"sync"
 )
 
-// FileMessage 定义Kafka消息的结构体，用于反序列化
-type FileMessage struct {
-	Code    int    `json:"code"`
-	Sha1    string `json:"sha1"`
-	Size    int64  `json:"size"`
-	Content []byte `json:"content"` // 假设content以字节数组形式传递
-	Type    string `json:"type"`
+const (
+	LoadFile     = "LoadFle"
+	DownLoadFile = "DownLoadFle"
+)
+
+type UploadCmdPayload struct {
+	TxID      string `json:"tx_id"`
+	EventID   string `json:"event_id"`
+	FileID    uint   `json:"file_id"`
+	Sha1      string `json:"sha1"`
+	Size      int32  `json:"size"`
+	OssKey    string `json:"oss_key"`
+	Content   string `json:"content"`
+	Type      string `json:"type"`
+	EventType string `json:"event_type"`
+}
+type Task struct {
+	msg     *sarama.ConsumerMessage
+	session sarama.ConsumerGroupSession
 }
 
 // FileUploadConsumer 文件上传消费者，实现在ConsumerGroupHandler接口
 type FileUploadConsumer struct {
 	ossClient   *ali_oss.OSSClient // OSS对象，用于oss操作
 	workerCount int                // 协程池大小
-	taskCh      chan *sarama.ConsumerMessage
+	taskCh      chan *Task
 	wg          sync.WaitGroup
 	localFile   *localfile.LoadFile
 	sessionMu   sync.RWMutex
 	session     sarama.ConsumerGroupSession
+	instanceID  string
 }
 
 // NewFileUploadConsumer 构造函数，创建消费者处理实例并初始化协程池
@@ -47,26 +66,34 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 		return nil
 	}
 
+	host, _ := os.Hostname()
+	instanceID := fmt.Sprintf("%s-%d", host, os.Getpid())
+
 	c := &FileUploadConsumer{
 		ossClient:   ossClient,
 		workerCount: workerCount,
-		taskCh:      make(chan *sarama.ConsumerMessage, workerCount*2), // 缓冲队列
+		taskCh:      make(chan *Task, workerCount*2), // 缓冲队列
 		localFile:   &localfile.LoadFile{},
+		instanceID:  instanceID,
 	}
 	// 启动 workerCount 个后台协程从队列中消费任务
 	for i := 0; i < workerCount; i++ {
 		c.wg.Add(1)
 		go func(ctx context.Context) {
 			defer c.wg.Done()
-			for msg := range c.taskCh {
-				// 处理消息并上传OSS
-				c.processMessage(msg)
-				// 标记消息已处理，用于提交偏移量
-				// （MarkMessage是并发安全的，可在协程中调用）
-				// 注意：只有在确认消息处理完成且无需重试时才标记
-				// 若处理失败可选择不标记以使Kafka稍后重新投递
-				if session := c.getSession(); session != nil {
-					session.MarkMessage(msg, "")
+			for t := range c.taskCh {
+				err := c.processMessage(ctx, t.msg)
+				if err == nil {
+					// 仅在成功时提交 offset
+					// session 可能已结束：这里做一次保护
+					if t.session != nil && t.session.Context().Err() == nil {
+						t.session.MarkMessage(t.msg, "")
+					}
+				} else {
+					// 失败不 Mark，让 Kafka 重投（至少一次）
+					log.Logger.Error("[NewFileUploadConsumer]process message failed", zap.Error(err),
+						zap.Int32("partition", t.msg.Partition),
+						zap.Int64("offset", t.msg.Offset))
 				}
 			}
 		}(ctx)
@@ -76,121 +103,202 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 
 // Setup 在新的会话开始时调用（如平衡分区后）
 func (c *FileUploadConsumer) Setup(session sarama.ConsumerGroupSession) error {
-	c.sessionMu.Lock()
-	c.session = session // 保存当前会话，供并发协程使用
-	c.sessionMu.Unlock()
-	log.Logger.Info("Consumer session setup")
+	log.Logger.Info("[Setup]Consumer session setup")
 	return nil
 }
 
 // Cleanup 在会话结束时调用（如发生再均衡前）
 func (c *FileUploadConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
-	c.sessionMu.Lock()
-	c.session = nil
-	c.sessionMu.Unlock()
-	// 关闭任务通道，停止接受新任务
-	close(c.taskCh)
-	// 等待正在处理的任务完成
-	c.wg.Wait()
-	log.Logger.Info("Consumer session cleanup, all pending tasks done.")
+	log.Logger.Info("[Cleanup]Consumer session cleanup, all pending tasks done.")
 	return nil
 }
 
 // ConsumeClaim 消费组对指定Topic/分区的消费逻辑
 func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	// 从Messages()通道持续读取消息
-	for {
+	for msg := range claim.Messages() {
+		// rebalance 时避免阻塞投递
 		select {
-		case msg := <-claim.Messages():
-			if msg == nil {
-				continue
-			}
-			// 将消息指针投递到任务队列，由后台协程并发处理
-			c.taskCh <- msg
-			// 可以选择不在此立即MarkMessage，由后台处理完成后Mark
-			// 此处不立即Mark可确保任务真正完成后再提交offset，保证至少处理一次
+		case c.taskCh <- &Task{msg: msg, session: session}:
 		case <-session.Context().Done():
-			// 分区消费会话结束（可能触发rebalance），跳出循环
 			return nil
 		}
 	}
+	return nil
 }
 
 // 实际处理单条消息的逻辑，包括反序列化、缓存检查和OSS上传
-func (c *FileUploadConsumer) processMessage(msg *sarama.ConsumerMessage) {
-	// 反序列化消息内容
-	var fileMsg FileMessage
-	if err := json.Unmarshal(msg.Value, &fileMsg); err != nil {
-		log.Logger.Info("Failed to decode message ",
-			zap.String("offset", strconv.FormatInt(msg.Offset, 10)),
-			zap.String("error", err.Error()))
-		return
+func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.ConsumerMessage) error {
+	var p UploadCmdPayload
+	if err := json.Unmarshal(msg.Value, &p); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
 	}
-	// 构造本地缓存文件路径（使用文件sha1作为文件名）
-	filePath, err := c.localFile.PathForSha1(fileMsg.Sha1)
+	if p.EventID == "" || p.Sha1 == "" || p.OssKey == "" {
+		return fmt.Errorf("invalid payload: event_id/sha1/oss_key required")
+	}
+
+	// 1) Inbox 幂等领取
+	acquired, done, err := c.tryBeginInbox(ctx, p.EventID)
 	if err != nil {
-		log.Logger.Info("Failed to get file path")
-		return
+		return err
 	}
-	// 检查本地缓存是否已有该文件
+	if done {
+		return nil // 已处理过，允许 MarkMessage
+	}
+	if !acquired {
+		return fmt.Errorf("inbox locked by other worker, retry later")
+	}
+
+	// 2) 构造本地缓存路径
+	filePath, err := c.localFile.PathForSha1(p.Sha1)
+	if err != nil {
+		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
+		return err
+	}
+
+	// 3) OSS 是否已存在（用 OssKey）
+	ossExists, err := c.ossClient.ObjectExists(p.OssKey)
+	if err != nil {
+		// 检查失败不应直接跳过；继续走流程，但记录一下
+		log.Logger.Warn("OSS existence check failed", zap.Error(err), zap.String("ossKey", p.OssKey))
+		ossExists = false
+	}
+
+	// 4) 本地是否存在
 	fileExists := c.localFile.FileExists(filePath)
-	// 检查OSS中是否已存在该对象
-	ossExists, err := c.ossClient.ObjectExists(fileMsg.Sha1)
-	if err != nil {
-		log.Logger.Info("OSS existence check failed ",
-			zap.String("sha1", fileMsg.Sha1),
-			zap.String("error", err.Error()))
-		// 如果无法检查OSS，可选择不跳过上传
-	}
-	// 判断跳过条件：本地和OSS均已存在则跳过上传
-	if fileExists && ossExists {
-		log.Logger.Info("File %s already in cache and OSS", zap.String("sha1", fileMsg.Sha1))
-		return
-	}
-	// 如果本地不存在则先将内容写入本地文件缓存
+
+	// 5) 如果本地不存在且是上传事件  写盘
 	if !fileExists {
-		switch fileMsg.Code {
-		case 0: //上传服务
-			_, err := c.localFile.SaveFile(fileMsg.Sha1, fileMsg.Content)
+		switch p.EventType {
+		case DownLoadFile:
+			if !ossExists {
+				return fmt.Errorf("Have no files exited in loacal or oss")
+			}
+			err := c.ossClient.DownloadFile(p.OssKey, filePath)
 			if err != nil {
-				log.Logger.Info("Failed to write file to cache",
-					zap.String("filepath", filePath),
-					zap.String("error", err.Error()))
-				return
+				return fmt.Errorf("download file: %w", err)
 			}
-			break
-		case 1: //下载服务
-			err := c.ossClient.DownloadFile(fileMsg.Sha1, filePath)
-			if err != nil {
-				return
-			}
-			break
-		}
-	}
-	// 如果OSS不存在对应文件，则执行上传
-	if !ossExists {
-		switch fileMsg.Code {
-		case 0: //上传服务
-			if err := c.ossClient.UploadFile(filePath, fileMsg.Sha1, fileMsg.Type); err != nil {
-				log.Logger.Info("Failed to upload to OSS",
-					zap.String("filepath", filePath),
-					zap.String("error", err.Error()))
-				// 上传失败，此处可根据需要选择重试或不MarkMessage以触发重消费
-				return
-			}
-			log.Logger.Info("Uploaded file to OSS successfully",
-				zap.String("fileSha", fileMsg.Sha1),
-				zap.String("size", strconv.FormatInt(fileMsg.Size, 10)))
-			break
-		case 1: //下载服务
-			log.Logger.Error("file not found in OSS and local", zap.String("filePath", filePath))
-			return
+			return nil
 		}
 
-	} else {
-		log.Logger.Info("OSS already has file, local cache updated (if needed).",
-			zap.String("fileSha", fileMsg.Sha1))
 	}
+
+	// 6) 上传 OSS（若不存在）
+	if !ossExists {
+		switch p.EventType {
+		case LoadFile:
+			if err := c.ossClient.UploadBytes([]byte(p.Content), p.OssKey, p.Type); err != nil {
+				_ = c.markInboxFailed(ctx, p.EventID, err.Error())
+				return fmt.Errorf("upload oss: %w", err)
+			}
+		}
+	}
+
+	// 7) 更新业务状态（files.status=READY 等）+ inbox DONE
+	if err := c.finalizeSuccess(ctx, &p); err != nil {
+		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
+		return err
+	}
+	return nil
+}
+
+func (c *FileUploadConsumer) finalizeSuccess(ctx context.Context, p *UploadCmdPayload) error {
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 例：更新 files 状态（按你的真实表结构改）
+		if err := tx.Exec(
+			"UPDATE files SET status='READY', oss_key=?, size=? WHERE sha1=?",
+			p.OssKey, p.Size, p.Sha1,
+		).Error; err != nil {
+			return err
+		}
+
+		// inbox done
+		if err := tx.Model(&model.Inbox{}).
+			Where("event_id = ? AND locked_by = ?", p.EventID, c.instanceID).
+			Updates(map[string]any{
+				"status":       model.InboxDone,
+				"locked_by":    "",
+				"locked_until": nil,
+				"updated_at":   time.Now(),
+			}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (c *FileUploadConsumer) tryBeginInbox(ctx context.Context, eventID string) (acquired bool, done bool, err error) {
+	now := time.Now()
+	lockUntil := now.Add(2 * time.Minute)
+
+	rec := model.Inbox{
+		EventID:     eventID,
+		Status:      model.InboxProcessing,
+		LockedBy:    c.instanceID,
+		LockedUntil: &lockUntil,
+		Attempts:    1,
+	}
+
+	// 1) 先插入
+	if err := internal.DB.WithContext(ctx).Create(&rec).Error; err == nil {
+		return true, false, nil
+	} else {
+		// 2) 不是重复键就返回错误
+		if !isDupKey(err) {
+			return false, false, err
+		}
+	}
+
+	// 3) 查现状
+	var existing model.Inbox
+	if err := internal.DB.WithContext(ctx).First(&existing, "event_id = ?", eventID).Error; err != nil {
+		return false, false, err
+	}
+	if existing.Status == model.InboxDone {
+		return false, true, nil
+	}
+
+	// 4) 尝试接管（锁过期才接管）
+	res := internal.DB.WithContext(ctx).Model(&model.Inbox{}).
+		Where("event_id = ? AND status <> ? AND (locked_until IS NULL OR locked_until < ?)",
+			eventID, model.InboxDone, now).
+		Updates(map[string]any{
+			"status":       model.InboxProcessing,
+			"locked_by":    c.instanceID,
+			"locked_until": &lockUntil,
+			"attempts":     gorm.Expr("attempts + 1"),
+			"updated_at":   now,
+		})
+
+	if res.Error != nil {
+		return false, false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		// 别的实例仍持锁处理中
+		return false, false, nil
+	}
+	return true, false, nil
+}
+
+func (c *FileUploadConsumer) markInboxFailed(ctx context.Context, eventID, errMsg string) error {
+	now := time.Now()
+	return internal.DB.WithContext(ctx).Model(&model.Inbox{}).
+		Where("event_id = ? AND locked_by = ?", eventID, c.instanceID).
+		Updates(map[string]any{
+			"status":       model.InboxFailed,
+			"last_error":   errMsg,
+			"locked_until": nil,
+			"locked_by":    "",
+			"updated_at":   now,
+		}).Error
+}
+
+// 你可以用 mysql driver 的错误码 1062；这里给一个通用兜底
+func isDupKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "Duplicate entry") || strings.Contains(s, "Error 1062")
 }
 
 // getSession 安全地读取当前的ConsumerGroupSession

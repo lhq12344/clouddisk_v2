@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"bytes"
-	"store_srv/log"
+	"go_test/other_srv/store_srv/log"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
@@ -49,7 +49,7 @@ func init() {
 		Username:            "nacos", // ← 重要
 		Password:            "nacos", // ← 重要
 	}
-	log.Logger.Info("Creating Nacos client...",
+	log.Logger.Info("[Nacos]Creating Nacos client...",
 		zap.String("server", "192.168.149.128:30848"),
 		zap.String("namespace", clientConfig.NamespaceId))
 
@@ -58,7 +58,7 @@ func init() {
 		ServerConfigs: serverConfigs,
 	})
 	if err != nil {
-		log.Logger.Error("create nacos client failed", zap.Error(err))
+		log.Logger.Error("[Nacos]create nacos client failed", zap.Error(err))
 		return
 	}
 
@@ -67,24 +67,24 @@ func init() {
 		DataId: "clouddisk.json",
 		Group:  "dev",
 		OnChange: func(namespace, group, dataId, data string) {
-			log.Logger.Warn("nacos config changed")
+			log.Logger.Warn("[Nacos]nacos config changed")
 			if data == "" {
-				log.Logger.Error("nacos returned empty hot-update config")
+				log.Logger.Error("[Nacos]nacos returned empty hot-update config")
 				return
 			}
 
 			if err := v.ReadConfig(bytes.NewBuffer([]byte(data))); err != nil {
-				log.Logger.Error("viper read hot update failed", zap.Error(err))
+				log.Logger.Error("[Nacos]viper read hot update failed", zap.Error(err))
 				return
 			}
 			if err := v.Unmarshal(&ViperConf); err != nil {
-				log.Logger.Error("unmarshal hot update failed", zap.Error(err))
+				log.Logger.Error("[Nacos]unmarshal hot update failed", zap.Error(err))
 				return
 			}
 		},
 	})
 	if err != nil {
-		log.Logger.Error("listen config failed", zap.Error(err))
+		log.Logger.Error("[Nacos]listen config failed", zap.Error(err))
 		return
 	}
 
@@ -94,19 +94,19 @@ func init() {
 		Group:  "dev",
 	})
 	if err != nil || content == "" {
-		log.Logger.Error("get initial config failed", zap.Error(err))
+		log.Logger.Error("[Nacos]get initial config failed", zap.Error(err))
 		return
 	}
 
 	// 5. 解析 yaml -> struct
 	if err := v.ReadConfig(bytes.NewBuffer([]byte(content))); err != nil {
-		log.Logger.Error("viper read config failed", zap.Error(err))
+		log.Logger.Error("[Nacos]viper read config failed", zap.Error(err))
 		return
 	}
 	if err := v.Unmarshal(&ViperConf); err != nil {
-		log.Logger.Error("unmarshal config failed", zap.Error(err))
+		log.Logger.Error("[Nacos]unmarshal config failed", zap.Error(err))
 		return
 	}
 
-	log.Logger.Info("Nacos config loaded successfully")
+	log.Logger.Info("[Nacos]Nacos config loaded successfully")
 }

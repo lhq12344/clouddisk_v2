@@ -2,7 +2,7 @@ package internal
 
 import (
 	"fmt"
-	"go_test/model"
+	"go_test/backword_part/model"
 	"log"
 	"os"
 	"time"

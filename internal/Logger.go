@@ -1,4 +1,4 @@
-package log
+package internal
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+var Logger *zap.Logger
 var Log *zap.SugaredLogger
 
 func init() {
@@ -22,7 +23,7 @@ func init() {
 func NewLogger() (*zap.Logger, *zap.SugaredLogger, error) {
 	// 文件写入器
 	fileWriter := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   "backword.log",
+		Filename:   "storeSrv.log",
 		MaxSize:    50,
 		MaxBackups: 3,
 		MaxAge:     30,

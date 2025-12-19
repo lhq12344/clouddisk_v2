@@ -11,6 +11,7 @@ require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/go-redis/redis/v8 v8.11.0
 	github.com/goccy/go-json v0.10.2
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.20.0
 	github.com/nacos-group/nacos-sdk-go/v2 v2.1.1
 	github.com/pkg/errors v0.9.1

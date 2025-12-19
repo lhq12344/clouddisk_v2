@@ -31,9 +31,9 @@ func (c *OSSClient) UploadFile(localPath string, objectKey string, contentType s
 }
 
 // UploadBytes 将内存中的字节数据data上传为OSS上的对象objectKey
-func (c *OSSClient) UploadBytes(data []byte, objectKey string) error {
+func (c *OSSClient) UploadBytes(data []byte, objectKey string, contentType string) error {
 	reader := bytes.NewReader(data)
-	return c.Bucket.PutObject(objectKey, reader)
+	return c.Bucket.PutObject(objectKey, reader, oss.Routines(3), oss.Checkpoint(true, "./checkpoint"), oss.ContentType(contentType))
 }
 
 // ObjectExists 判断OSS桶中是否存在指定的对象

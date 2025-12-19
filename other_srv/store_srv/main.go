@@ -34,7 +34,7 @@ func main() {
 
 	brokers := []string{"192.168.149.128:31092"}
 	groupID := "store_srv_group"
-	topics := []string{"alioss"}
+	topics := []string{"file.upload.cmd"}
 
 	consumerGroup, err := sarama.NewConsumerGroup(brokers, groupID, cfg)
 	if err != nil {
@@ -52,6 +52,7 @@ func main() {
 	handler := kafka.NewFileUploadConsumer(ctx, 10)
 	if handler == nil {
 		log.Fatalf("failed to initialize file upload consumer")
+		return
 	}
 
 	// 持续消费，Consume 会在 Rebalance 后重新返回，需要循环调用以保持消费
