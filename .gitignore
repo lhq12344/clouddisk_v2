@@ -34,3 +34,6 @@ tmp/
 other_srv/store_srv/log/other_srv/store_srv/log/
 >>>>>>> d5a51f9 (chore: ignore nacos log/cache directory)
 other_srv/store_srv/log/
+
+# runtime logs / nacos cache
+log/
