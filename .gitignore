@@ -37,3 +37,6 @@ other_srv/store_srv/log/
 
 # runtime logs / nacos cache
 log/
+
+# runtime logs / nacos cache
+log/
