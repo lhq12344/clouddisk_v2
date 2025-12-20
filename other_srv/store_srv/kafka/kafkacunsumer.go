@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"go_test/other_srv/store_srv/ali_oss"
 	"go_test/other_srv/store_srv/localfile"
 	"go_test/other_srv/store_srv/log"
 	"sync"
@@ -38,8 +37,8 @@ type Task struct {
 
 // FileUploadConsumer 文件上传消费者，实现在ConsumerGroupHandler接口
 type FileUploadConsumer struct {
-	ossClient   *ali_oss.OSSClient // OSS对象，用于oss操作
-	workerCount int                // 协程池大小
+	ossClient   *internal.MINIOClient // OSS对象，用于oss操作
+	workerCount int                   // 协程池大小
 	taskCh      chan *Task
 	wg          sync.WaitGroup
 	localFile   *localfile.LoadFile
@@ -50,22 +49,11 @@ type FileUploadConsumer struct {
 
 // NewFileUploadConsumer 构造函数，创建消费者处理实例并初始化协程池
 func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadConsumer {
-	accessKeyID := ViperConf.Alioss.AccessKeyId
-	accessKeySecret := ViperConf.Alioss.AccessKeySecret
-	endpoint := ViperConf.Alioss.Endpoint
-	bucketName := ViperConf.Alioss.BucketName
-
-	ossClient, err := ali_oss.NewOSSClient(endpoint, accessKeyID, accessKeySecret, bucketName)
-	if err != nil {
-		log.Logger.Info("oss connect fail", zap.String("err", err.Error()))
-		return nil
-	}
-
 	host, _ := os.Hostname()
 	instanceID := fmt.Sprintf("%s-%d", host, os.Getpid())
 
 	c := &FileUploadConsumer{
-		ossClient:   ossClient,
+		ossClient:   internal.MinIOClient,
 		workerCount: workerCount,
 		taskCh:      make(chan *Task, workerCount*2), // 缓冲队列
 		localFile:   &localfile.LoadFile{},
@@ -144,7 +132,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 	}
 
 	// 3) OSS 是否已存在（用 OssKey）
-	ossExists, err := c.ossClient.ObjectExists(p.OssKey)
+	ossExists, err := c.ossClient.MinIOObjectExists(p.OssKey)
 	if err != nil {
 		// 检查失败不应直接跳过；继续走流程，但记录一下
 		log.Logger.Warn("OSS existence check failed", zap.Error(err), zap.String("ossKey", p.OssKey))
@@ -155,7 +143,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 	if !ossExists {
 		switch p.EventType {
 		case model.LoadFile:
-			if err := c.ossClient.UploadBytes([]byte(p.Content), p.OssKey, p.Type); err != nil {
+			if err := c.ossClient.MinIOUploadBytes([]byte(p.Content), p.OssKey, p.Type); err != nil {
 				_ = c.markInboxFailed(ctx, p.EventID, err.Error())
 				return fmt.Errorf("upload oss: %w", err)
 			}

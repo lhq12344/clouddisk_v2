@@ -18,6 +18,7 @@ type ViperConfig struct {
 	JWTConfig    JWTConfig    `mapstructure:"jwt"`
 	KafkaConfig  KafkaConfig  `mapstructure:"kafka"`
 	Alioss       Alioss       `mapstructure:"alioss"`
+	MinIO        MinioConf    `mapstructure:"minio"`
 }
 
 var ViperConf ViperConfig
@@ -115,5 +116,6 @@ func init() {
 	InitConsul()
 	InitKafkaProducer()
 	InitAli()
+	InitMinio()
 	log.Logger.Info("All services initialized")
 }
