@@ -40,3 +40,6 @@ log/
 
 # runtime logs / nacos cache
 log/
+
+# runtime logs / nacos cache
+log/
