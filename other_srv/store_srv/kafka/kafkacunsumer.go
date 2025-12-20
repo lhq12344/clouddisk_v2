@@ -20,11 +20,6 @@ import (
 	"sync"
 )
 
-const (
-	LoadFile     = "LoadFle"
-	DownLoadFile = "DownLoadFle"
-)
-
 type UploadCmdPayload struct {
 	TxID      string `json:"tx_id"`
 	EventID   string `json:"event_id"`
@@ -148,13 +143,6 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		return fmt.Errorf("inbox locked by other worker, retry later")
 	}
 
-	// 2) 构造本地缓存路径
-	filePath, err := c.localFile.PathForSha1(p.Sha1)
-	if err != nil {
-		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
-		return err
-	}
-
 	// 3) OSS 是否已存在（用 OssKey）
 	ossExists, err := c.ossClient.ObjectExists(p.OssKey)
 	if err != nil {
@@ -163,29 +151,10 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		ossExists = false
 	}
 
-	// 4) 本地是否存在
-	fileExists := c.localFile.FileExists(filePath)
-
-	// 5) 如果本地不存在且是上传事件  写盘
-	if !fileExists {
-		switch p.EventType {
-		case DownLoadFile:
-			if !ossExists {
-				return fmt.Errorf("Have no files exited in loacal or oss")
-			}
-			err := c.ossClient.DownloadFile(p.OssKey, filePath)
-			if err != nil {
-				return fmt.Errorf("download file: %w", err)
-			}
-			return nil
-		}
-
-	}
-
 	// 6) 上传 OSS（若不存在）
 	if !ossExists {
 		switch p.EventType {
-		case LoadFile:
+		case model.LoadFile:
 			if err := c.ossClient.UploadBytes([]byte(p.Content), p.OssKey, p.Type); err != nil {
 				_ = c.markInboxFailed(ctx, p.EventID, err.Error())
 				return fmt.Errorf("upload oss: %w", err)
@@ -204,13 +173,10 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 func (c *FileUploadConsumer) finalizeSuccess(ctx context.Context, p *UploadCmdPayload) error {
 	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 例：更新 files 状态（按你的真实表结构改）
-		if err := tx.Exec(
-			"UPDATE files SET status='READY', oss_key=?, size=? WHERE sha1=?",
-			p.OssKey, p.Size, p.Sha1,
-		).Error; err != nil {
+		if err := tx.Model(&model.File{}).Where("sha1 = ?", p.Sha1).
+			Update("status", model.FileSuccess).Error; err != nil {
 			return err
 		}
-
 		// inbox done
 		if err := tx.Model(&model.Inbox{}).
 			Where("event_id = ? AND locked_by = ?", p.EventID, c.instanceID).

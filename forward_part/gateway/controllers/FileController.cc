@@ -211,48 +211,13 @@ void FileController::filedowm(const HttpRequestPtr &req,
 								}
 
 								std::string downloadURL;
-
-								switch (response->code())
-								{
-								case 0: // nginx/local
-								{
-									downloadURL = "http://192.168.149.128:2025/download/" +
-												  response->message() +
-												  "?filename=" + url_encode(request->filename());
-
-									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k302Found);
-									resp->addHeader("Location", downloadURL);
-									callback(resp);
-									LOG_INFO("[filedowm] user:{} find {} download file local/nginx url {}",
-											 request->username(), request->filename(), downloadURL);
-
-									break;
-								}
-								case 1: // oss signed url
-								{
-									downloadURL = response->message(); // 这里已经是完整 signed URL
-									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k302Found);
-									resp->addHeader("Location", downloadURL);
-									callback(resp);
-									LOG_INFO("[filedowm] user:{} find {} download file oss signed url {}",
-											 request->username(), request->filename(), downloadURL);
-									break;
-								}
-								default:
-								{
-									Json::Value ret;
-									ret["error"] = "invalid_code";
-									ret["code"] = response->code();
-									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-									resp->setStatusCode(drogon::k400BadRequest);
-									LOG_INFO("[filedowm] user:{} find {} download file failure",
-											 request->username(), request->filename());
-									callback(resp);
-									break;
-								}
-								}
+								downloadURL = response->message(); // 这里已经是完整 signed URL
+								auto resp = drogon::HttpResponse::newHttpResponse();
+								resp->setStatusCode(drogon::k302Found);
+								resp->addHeader("Location", downloadURL);
+								callback(resp);
+								LOG_INFO("[filedowm] user:{} find {} download file oss signed url {}",
+										 request->username(), request->filename(), downloadURL);
 							});
 }
 
@@ -387,48 +352,14 @@ void FileController::Showfile(const HttpRequestPtr &req,
 								}
 
 								std::string previewURL;
+								// response->message() 是可直接打开的 inline signed url
+								previewURL = response->message();
 
-								switch (response->code())
-								{
-								case 0: // local preview via nginx
-								{
-									const std::string path = response->message();
-									previewURL = "http://192.168.149.128:2025/preview/" + path +
-												 "?filename=" + url_encode(request->filename());
-
-									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k303SeeOther); // 临时跳转更合适
-									resp->addHeader("Location", previewURL);
-									callback(resp);
-									LOG_INFO("[Showfile] user:{} find {} show file local/nginx url{}",
-											 request->username(), request->filename(), previewURL);
-									break;
-								}
-								case 1: // oss inline signed url
-								{
-									// response->message() 是可直接打开的 inline signed url
-									previewURL = response->message();
-
-									auto resp = drogon::HttpResponse::newHttpResponse();
-									resp->setStatusCode(drogon::k303SeeOther);
-									resp->addHeader("Location", previewURL);
-									callback(resp);
-									LOG_INFO("[Showfile] user:{} find {} show file oss signed url url{}",
-											 request->username(), request->filename(), previewURL);
-									break;
-								}
-								default:
-								{
-									Json::Value ret;
-									ret["error"] = "invalid_code";
-									ret["code"] = response->code();
-									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-									resp->setStatusCode(drogon::k400BadRequest);
-									callback(resp);
-									LOG_INFO("[Showfile] user:{} find {} show file failure",
-											 request->username(), request->filename());
-									break;
-								}
-								}
+								auto resp = drogon::HttpResponse::newHttpResponse();
+								resp->setStatusCode(drogon::k303SeeOther);
+								resp->addHeader("Location", previewURL);
+								callback(resp);
+								LOG_INFO("[Showfile] user:{} find {} show file oss signed url url{}",
+										 request->username(), request->filename(), previewURL);
 							});
 }

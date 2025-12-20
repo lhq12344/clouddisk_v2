@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"go_test/other_srv/store_srv/kafka"
 	"log"
 	"os"
 	"os/signal"
-	"store_srv/kafka"
 	"syscall"
 	"time"
 
