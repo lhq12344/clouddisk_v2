@@ -9,6 +9,8 @@
 #include "../logs/Logger.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <grpcpp/grpcpp.h>
+
 struct ServerConfig
 {
 	std::string host;

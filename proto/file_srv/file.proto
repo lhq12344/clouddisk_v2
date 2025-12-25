@@ -1,10 +1,7 @@
 syntax = "proto3";
 
-
 package file;
 option go_package = "clouddisk_v2/file_srv/protobuf;filepb";
-
-
 
 message ReqFileDown {
   string username  = 1;
@@ -42,7 +39,6 @@ message Reqloadfile {
   int32  file_size = 6;
 }
 
-
 message Reqshowfile  {
   string username  = 1;
   string userid    = 2;
@@ -50,16 +46,28 @@ message Reqshowfile  {
   string filehash  = 4;
   int32  file_size = 5;
 }
+
 message Resp {
   int32  code    = 1;
   string message = 2;
 }
 
+message ReqResolveFileHash {
+  string userid   = 1; // 建议仍保留，方便调试；真正以服务端注入为准
+  string filename = 2; // 用户文件名（UserFile.Name）
+}
+
+message RespResolveFileHash {
+  int32  code      = 1;
+  string message   = 2;
+  string file_hash = 3; // File.Sha1
+  int64  file_size = 4; // File.Size
+}
 
 service fileService {
   rpc filedowm(ReqFileDown) returns (Resp) {}
   rpc LoadFile(Reqloadfile) returns (Resp) {}
   rpc Showfile(Reqshowfile) returns (Resp ) {}
   rpc filequeryinfo(ReqFileQuery) returns (RespFileQuery) {}
+  rpc ResolveFileHash(ReqResolveFileHash) returns (RespResolveFileHash) {}
 }
-

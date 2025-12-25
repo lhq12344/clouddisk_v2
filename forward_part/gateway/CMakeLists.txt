@@ -105,6 +105,13 @@ set(FILE_PROTO_SRCS
     ${FILE_PROTO_DIR}/file.grpc.pb.cc
 )
 
+# gRPC/protobuf generated sources for AI service client
+set(AI_PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/AI_srv)
+set(AI_PROTO_SRCS
+    ${AI_PROTO_DIR}/ai.pb.cc
+    ${AI_PROTO_DIR}/ai.grpc.pb.cc
+)
+
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
 # use the following line to create views with namespaces.
@@ -122,7 +129,8 @@ target_include_directories(${PROJECT_NAME}
                PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../internal
                    ${CMAKE_CURRENT_SOURCE_DIR}/../logs
                    ${ACCOUNT_PROTO_DIR}
-                   ${FILE_PROTO_DIR})
+                   ${FILE_PROTO_DIR}
+                   ${AI_PROTO_DIR})
 target_include_directories(${PROJECT_NAME}
                 PRIVATE /usr/local/include/nacos
                         /usr/include/nacos)
@@ -140,7 +148,8 @@ target_sources(${PROJECT_NAME}
            ${INTERNAL_SRC}
            ${LOGS_SRC}
            ${ACCOUNT_PROTO_SRCS}
-           ${FILE_PROTO_SRCS})
+           ${FILE_PROTO_SRCS}
+           ${AI_PROTO_SRCS})
 # ##############################################################################
 # uncomment the following line for dynamically loading views 
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)

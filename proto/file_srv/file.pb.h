@@ -59,6 +59,9 @@ extern ReqFileDownDefaultTypeInternal _ReqFileDown_default_instance_;
 class ReqFileQuery;
 struct ReqFileQueryDefaultTypeInternal;
 extern ReqFileQueryDefaultTypeInternal _ReqFileQuery_default_instance_;
+class ReqResolveFileHash;
+struct ReqResolveFileHashDefaultTypeInternal;
+extern ReqResolveFileHashDefaultTypeInternal _ReqResolveFileHash_default_instance_;
 class Reqloadfile;
 struct ReqloadfileDefaultTypeInternal;
 extern ReqloadfileDefaultTypeInternal _Reqloadfile_default_instance_;
@@ -71,6 +74,9 @@ extern RespDefaultTypeInternal _Resp_default_instance_;
 class RespFileQuery;
 struct RespFileQueryDefaultTypeInternal;
 extern RespFileQueryDefaultTypeInternal _RespFileQuery_default_instance_;
+class RespResolveFileHash;
+struct RespResolveFileHashDefaultTypeInternal;
+extern RespResolveFileHashDefaultTypeInternal _RespResolveFileHash_default_instance_;
 }  // namespace file
 namespace google {
 namespace protobuf {
@@ -82,6 +88,225 @@ namespace file {
 // ===================================================================
 
 
+// -------------------------------------------------------------------
+
+class RespResolveFileHash final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:file.RespResolveFileHash) */ {
+ public:
+  inline RespResolveFileHash() : RespResolveFileHash(nullptr) {}
+  ~RespResolveFileHash() override;
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR RespResolveFileHash(
+      ::google::protobuf::internal::ConstantInitialized);
+
+  inline RespResolveFileHash(const RespResolveFileHash& from) : RespResolveFileHash(nullptr, from) {}
+  inline RespResolveFileHash(RespResolveFileHash&& from) noexcept
+      : RespResolveFileHash(nullptr, std::move(from)) {}
+  inline RespResolveFileHash& operator=(const RespResolveFileHash& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline RespResolveFileHash& operator=(RespResolveFileHash&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetArena() == from.GetArena()
+#ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetArena() != nullptr
+#endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const RespResolveFileHash& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const RespResolveFileHash* internal_default_instance() {
+    return reinterpret_cast<const RespResolveFileHash*>(
+        &_RespResolveFileHash_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 8;
+  friend void swap(RespResolveFileHash& a, RespResolveFileHash& b) { a.Swap(&b); }
+  inline void Swap(RespResolveFileHash* other) {
+    if (other == this) return;
+#ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() != nullptr && GetArena() == other->GetArena()) {
+#else   // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() == other->GetArena()) {
+#endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(RespResolveFileHash* other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  RespResolveFileHash* New(::google::protobuf::Arena* arena = nullptr) const final {
+    return ::google::protobuf::Message::DefaultConstruct<RespResolveFileHash>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const RespResolveFileHash& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const RespResolveFileHash& from) { RespResolveFileHash::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(
+      ::google::protobuf::MessageLite& to_msg,
+      const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() final;
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* _InternalSerialize(
+      ::uint8_t* target,
+      ::google::protobuf::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* arena);
+  void SharedDtor();
+  void InternalSwap(RespResolveFileHash* other);
+ private:
+  friend class ::google::protobuf::internal::AnyMetadata;
+  static ::absl::string_view FullMessageName() { return "file.RespResolveFileHash"; }
+
+ protected:
+  explicit RespResolveFileHash(::google::protobuf::Arena* arena);
+  RespResolveFileHash(::google::protobuf::Arena* arena, const RespResolveFileHash& from);
+  RespResolveFileHash(::google::protobuf::Arena* arena, RespResolveFileHash&& from) noexcept
+      : RespResolveFileHash(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::Message::ClassData* GetClassData() const final;
+
+ public:
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kMessageFieldNumber = 2,
+    kFileHashFieldNumber = 3,
+    kFileSizeFieldNumber = 4,
+    kCodeFieldNumber = 1,
+  };
+  // string message = 2;
+  void clear_message() ;
+  const std::string& message() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_message(Arg_&& arg, Args_... args);
+  std::string* mutable_message();
+  PROTOBUF_NODISCARD std::string* release_message();
+  void set_allocated_message(std::string* value);
+
+  private:
+  const std::string& _internal_message() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_message(
+      const std::string& value);
+  std::string* _internal_mutable_message();
+
+  public:
+  // string file_hash = 3;
+  void clear_file_hash() ;
+  const std::string& file_hash() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_file_hash(Arg_&& arg, Args_... args);
+  std::string* mutable_file_hash();
+  PROTOBUF_NODISCARD std::string* release_file_hash();
+  void set_allocated_file_hash(std::string* value);
+
+  private:
+  const std::string& _internal_file_hash() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_file_hash(
+      const std::string& value);
+  std::string* _internal_mutable_file_hash();
+
+  public:
+  // int64 file_size = 4;
+  void clear_file_size() ;
+  ::int64_t file_size() const;
+  void set_file_size(::int64_t value);
+
+  private:
+  ::int64_t _internal_file_size() const;
+  void _internal_set_file_size(::int64_t value);
+
+  public:
+  // int32 code = 1;
+  void clear_code() ;
+  ::int32_t code() const;
+  void set_code(::int32_t value);
+
+  private:
+  ::int32_t _internal_code() const;
+  void _internal_set_code(::int32_t value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:file.RespResolveFileHash)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<
+      2, 4, 0,
+      49, 2>
+      _table_;
+
+  static constexpr const void* _raw_default_instance_ =
+      &_RespResolveFileHash_default_instance_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(
+        ::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena);
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena, const Impl_& from,
+                          const RespResolveFileHash& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr message_;
+    ::google::protobuf::internal::ArenaStringPtr file_hash_;
+    ::int64_t file_size_;
+    ::int32_t code_;
+    mutable ::google::protobuf::internal::CachedSize _cached_size_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_file_2eproto;
+};
 // -------------------------------------------------------------------
 
 class Resp final : public ::google::protobuf::Message
@@ -139,7 +364,7 @@ class Resp final : public ::google::protobuf::Message
     return reinterpret_cast<const Resp*>(
         &_Resp_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 0;
+  static constexpr int kIndexInFileMessages = 6;
   friend void swap(Resp& a, Resp& b) { a.Swap(&b); }
   inline void Swap(Resp* other) {
     if (other == this) return;
@@ -328,7 +553,7 @@ class Reqshowfile final : public ::google::protobuf::Message
     return reinterpret_cast<const Reqshowfile*>(
         &_Reqshowfile_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 6;
+  static constexpr int kIndexInFileMessages = 5;
   friend void swap(Reqshowfile& a, Reqshowfile& b) { a.Swap(&b); }
   inline void Swap(Reqshowfile* other) {
     if (other == this) return;
@@ -571,7 +796,7 @@ class Reqloadfile final : public ::google::protobuf::Message
     return reinterpret_cast<const Reqloadfile*>(
         &_Reqloadfile_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 5;
+  static constexpr int kIndexInFileMessages = 4;
   friend void swap(Reqloadfile& a, Reqloadfile& b) { a.Swap(&b); }
   inline void Swap(Reqloadfile* other) {
     if (other == this) return;
@@ -777,6 +1002,201 @@ class Reqloadfile final : public ::google::protobuf::Message
 };
 // -------------------------------------------------------------------
 
+class ReqResolveFileHash final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:file.ReqResolveFileHash) */ {
+ public:
+  inline ReqResolveFileHash() : ReqResolveFileHash(nullptr) {}
+  ~ReqResolveFileHash() override;
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR ReqResolveFileHash(
+      ::google::protobuf::internal::ConstantInitialized);
+
+  inline ReqResolveFileHash(const ReqResolveFileHash& from) : ReqResolveFileHash(nullptr, from) {}
+  inline ReqResolveFileHash(ReqResolveFileHash&& from) noexcept
+      : ReqResolveFileHash(nullptr, std::move(from)) {}
+  inline ReqResolveFileHash& operator=(const ReqResolveFileHash& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ReqResolveFileHash& operator=(ReqResolveFileHash&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetArena() == from.GetArena()
+#ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetArena() != nullptr
+#endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ReqResolveFileHash& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ReqResolveFileHash* internal_default_instance() {
+    return reinterpret_cast<const ReqResolveFileHash*>(
+        &_ReqResolveFileHash_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 7;
+  friend void swap(ReqResolveFileHash& a, ReqResolveFileHash& b) { a.Swap(&b); }
+  inline void Swap(ReqResolveFileHash* other) {
+    if (other == this) return;
+#ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() != nullptr && GetArena() == other->GetArena()) {
+#else   // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() == other->GetArena()) {
+#endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ReqResolveFileHash* other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ReqResolveFileHash* New(::google::protobuf::Arena* arena = nullptr) const final {
+    return ::google::protobuf::Message::DefaultConstruct<ReqResolveFileHash>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const ReqResolveFileHash& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const ReqResolveFileHash& from) { ReqResolveFileHash::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(
+      ::google::protobuf::MessageLite& to_msg,
+      const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() final;
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* _InternalSerialize(
+      ::uint8_t* target,
+      ::google::protobuf::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* arena);
+  void SharedDtor();
+  void InternalSwap(ReqResolveFileHash* other);
+ private:
+  friend class ::google::protobuf::internal::AnyMetadata;
+  static ::absl::string_view FullMessageName() { return "file.ReqResolveFileHash"; }
+
+ protected:
+  explicit ReqResolveFileHash(::google::protobuf::Arena* arena);
+  ReqResolveFileHash(::google::protobuf::Arena* arena, const ReqResolveFileHash& from);
+  ReqResolveFileHash(::google::protobuf::Arena* arena, ReqResolveFileHash&& from) noexcept
+      : ReqResolveFileHash(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::Message::ClassData* GetClassData() const final;
+
+ public:
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kUseridFieldNumber = 1,
+    kFilenameFieldNumber = 2,
+  };
+  // string userid = 1;
+  void clear_userid() ;
+  const std::string& userid() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_userid(Arg_&& arg, Args_... args);
+  std::string* mutable_userid();
+  PROTOBUF_NODISCARD std::string* release_userid();
+  void set_allocated_userid(std::string* value);
+
+  private:
+  const std::string& _internal_userid() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_userid(
+      const std::string& value);
+  std::string* _internal_mutable_userid();
+
+  public:
+  // string filename = 2;
+  void clear_filename() ;
+  const std::string& filename() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_filename(Arg_&& arg, Args_... args);
+  std::string* mutable_filename();
+  PROTOBUF_NODISCARD std::string* release_filename();
+  void set_allocated_filename(std::string* value);
+
+  private:
+  const std::string& _internal_filename() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filename(
+      const std::string& value);
+  std::string* _internal_mutable_filename();
+
+  public:
+  // @@protoc_insertion_point(class_scope:file.ReqResolveFileHash)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<
+      1, 2, 0,
+      46, 2>
+      _table_;
+
+  static constexpr const void* _raw_default_instance_ =
+      &_ReqResolveFileHash_default_instance_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(
+        ::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena);
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena, const Impl_& from,
+                          const ReqResolveFileHash& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr userid_;
+    ::google::protobuf::internal::ArenaStringPtr filename_;
+    mutable ::google::protobuf::internal::CachedSize _cached_size_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_file_2eproto;
+};
+// -------------------------------------------------------------------
+
 class ReqFileQuery final : public ::google::protobuf::Message
 /* @@protoc_insertion_point(class_definition:file.ReqFileQuery) */ {
  public:
@@ -832,7 +1252,7 @@ class ReqFileQuery final : public ::google::protobuf::Message
     return reinterpret_cast<const ReqFileQuery*>(
         &_ReqFileQuery_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 3;
+  static constexpr int kIndexInFileMessages = 2;
   friend void swap(ReqFileQuery& a, ReqFileQuery& b) { a.Swap(&b); }
   inline void Swap(ReqFileQuery* other) {
     if (other == this) return;
@@ -1027,7 +1447,7 @@ class ReqFileDown final : public ::google::protobuf::Message
     return reinterpret_cast<const ReqFileDown*>(
         &_ReqFileDown_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 1;
+  static constexpr int kIndexInFileMessages = 0;
   friend void swap(ReqFileDown& a, ReqFileDown& b) { a.Swap(&b); }
   inline void Swap(ReqFileDown* other) {
     if (other == this) return;
@@ -1270,7 +1690,7 @@ class FileInfo final : public ::google::protobuf::Message
     return reinterpret_cast<const FileInfo*>(
         &_FileInfo_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 2;
+  static constexpr int kIndexInFileMessages = 1;
   friend void swap(FileInfo& a, FileInfo& b) { a.Swap(&b); }
   inline void Swap(FileInfo* other) {
     if (other == this) return;
@@ -1513,7 +1933,7 @@ class RespFileQuery final : public ::google::protobuf::Message
     return reinterpret_cast<const RespFileQuery*>(
         &_RespFileQuery_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 4;
+  static constexpr int kIndexInFileMessages = 3;
   friend void swap(RespFileQuery& a, RespFileQuery& b) { a.Swap(&b); }
   inline void Swap(RespFileQuery* other) {
     if (other == this) return;
@@ -1677,82 +2097,6 @@ class RespFileQuery final : public ::google::protobuf::Message
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
 #endif  // __GNUC__
-// -------------------------------------------------------------------
-
-// Resp
-
-// int32 code = 1;
-inline void Resp::clear_code() {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.code_ = 0;
-}
-inline ::int32_t Resp::code() const {
-  // @@protoc_insertion_point(field_get:file.Resp.code)
-  return _internal_code();
-}
-inline void Resp::set_code(::int32_t value) {
-  _internal_set_code(value);
-  // @@protoc_insertion_point(field_set:file.Resp.code)
-}
-inline ::int32_t Resp::_internal_code() const {
-  ::google::protobuf::internal::TSanRead(&_impl_);
-  return _impl_.code_;
-}
-inline void Resp::_internal_set_code(::int32_t value) {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.code_ = value;
-}
-
-// string message = 2;
-inline void Resp::clear_message() {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.message_.ClearToEmpty();
-}
-inline const std::string& Resp::message() const
-    ABSL_ATTRIBUTE_LIFETIME_BOUND {
-  // @@protoc_insertion_point(field_get:file.Resp.message)
-  return _internal_message();
-}
-template <typename Arg_, typename... Args_>
-inline PROTOBUF_ALWAYS_INLINE void Resp::set_message(Arg_&& arg,
-                                                     Args_... args) {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.message_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
-  // @@protoc_insertion_point(field_set:file.Resp.message)
-}
-inline std::string* Resp::mutable_message() ABSL_ATTRIBUTE_LIFETIME_BOUND {
-  std::string* _s = _internal_mutable_message();
-  // @@protoc_insertion_point(field_mutable:file.Resp.message)
-  return _s;
-}
-inline const std::string& Resp::_internal_message() const {
-  ::google::protobuf::internal::TSanRead(&_impl_);
-  return _impl_.message_.Get();
-}
-inline void Resp::_internal_set_message(const std::string& value) {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.message_.Set(value, GetArena());
-}
-inline std::string* Resp::_internal_mutable_message() {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  return _impl_.message_.Mutable( GetArena());
-}
-inline std::string* Resp::release_message() {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  // @@protoc_insertion_point(field_release:file.Resp.message)
-  return _impl_.message_.Release();
-}
-inline void Resp::set_allocated_message(std::string* value) {
-  ::google::protobuf::internal::TSanWrite(&_impl_);
-  _impl_.message_.SetAllocated(value, GetArena());
-  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-        if (_impl_.message_.IsDefault()) {
-          _impl_.message_.Set("", GetArena());
-        }
-  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  // @@protoc_insertion_point(field_set_allocated:file.Resp.message)
-}
-
 // -------------------------------------------------------------------
 
 // ReqFileDown
@@ -2932,6 +3276,334 @@ inline ::int32_t Reqshowfile::_internal_file_size() const {
   return _impl_.file_size_;
 }
 inline void Reqshowfile::_internal_set_file_size(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_size_ = value;
+}
+
+// -------------------------------------------------------------------
+
+// Resp
+
+// int32 code = 1;
+inline void Resp::clear_code() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.code_ = 0;
+}
+inline ::int32_t Resp::code() const {
+  // @@protoc_insertion_point(field_get:file.Resp.code)
+  return _internal_code();
+}
+inline void Resp::set_code(::int32_t value) {
+  _internal_set_code(value);
+  // @@protoc_insertion_point(field_set:file.Resp.code)
+}
+inline ::int32_t Resp::_internal_code() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.code_;
+}
+inline void Resp::_internal_set_code(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.code_ = value;
+}
+
+// string message = 2;
+inline void Resp::clear_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.ClearToEmpty();
+}
+inline const std::string& Resp::message() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.Resp.message)
+  return _internal_message();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void Resp::set_message(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.Resp.message)
+}
+inline std::string* Resp::mutable_message() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_message();
+  // @@protoc_insertion_point(field_mutable:file.Resp.message)
+  return _s;
+}
+inline const std::string& Resp::_internal_message() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.message_.Get();
+}
+inline void Resp::_internal_set_message(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.Set(value, GetArena());
+}
+inline std::string* Resp::_internal_mutable_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.message_.Mutable( GetArena());
+}
+inline std::string* Resp::release_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.Resp.message)
+  return _impl_.message_.Release();
+}
+inline void Resp::set_allocated_message(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.message_.IsDefault()) {
+          _impl_.message_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.Resp.message)
+}
+
+// -------------------------------------------------------------------
+
+// ReqResolveFileHash
+
+// string userid = 1;
+inline void ReqResolveFileHash::clear_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.ClearToEmpty();
+}
+inline const std::string& ReqResolveFileHash::userid() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqResolveFileHash.userid)
+  return _internal_userid();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqResolveFileHash::set_userid(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqResolveFileHash.userid)
+}
+inline std::string* ReqResolveFileHash::mutable_userid() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_userid();
+  // @@protoc_insertion_point(field_mutable:file.ReqResolveFileHash.userid)
+  return _s;
+}
+inline const std::string& ReqResolveFileHash::_internal_userid() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.userid_.Get();
+}
+inline void ReqResolveFileHash::_internal_set_userid(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.Set(value, GetArena());
+}
+inline std::string* ReqResolveFileHash::_internal_mutable_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.userid_.Mutable( GetArena());
+}
+inline std::string* ReqResolveFileHash::release_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqResolveFileHash.userid)
+  return _impl_.userid_.Release();
+}
+inline void ReqResolveFileHash::set_allocated_userid(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.userid_.IsDefault()) {
+          _impl_.userid_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqResolveFileHash.userid)
+}
+
+// string filename = 2;
+inline void ReqResolveFileHash::clear_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.ClearToEmpty();
+}
+inline const std::string& ReqResolveFileHash::filename() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqResolveFileHash.filename)
+  return _internal_filename();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqResolveFileHash::set_filename(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqResolveFileHash.filename)
+}
+inline std::string* ReqResolveFileHash::mutable_filename() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_filename();
+  // @@protoc_insertion_point(field_mutable:file.ReqResolveFileHash.filename)
+  return _s;
+}
+inline const std::string& ReqResolveFileHash::_internal_filename() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.filename_.Get();
+}
+inline void ReqResolveFileHash::_internal_set_filename(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.Set(value, GetArena());
+}
+inline std::string* ReqResolveFileHash::_internal_mutable_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.filename_.Mutable( GetArena());
+}
+inline std::string* ReqResolveFileHash::release_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqResolveFileHash.filename)
+  return _impl_.filename_.Release();
+}
+inline void ReqResolveFileHash::set_allocated_filename(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.filename_.IsDefault()) {
+          _impl_.filename_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqResolveFileHash.filename)
+}
+
+// -------------------------------------------------------------------
+
+// RespResolveFileHash
+
+// int32 code = 1;
+inline void RespResolveFileHash::clear_code() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.code_ = 0;
+}
+inline ::int32_t RespResolveFileHash::code() const {
+  // @@protoc_insertion_point(field_get:file.RespResolveFileHash.code)
+  return _internal_code();
+}
+inline void RespResolveFileHash::set_code(::int32_t value) {
+  _internal_set_code(value);
+  // @@protoc_insertion_point(field_set:file.RespResolveFileHash.code)
+}
+inline ::int32_t RespResolveFileHash::_internal_code() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.code_;
+}
+inline void RespResolveFileHash::_internal_set_code(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.code_ = value;
+}
+
+// string message = 2;
+inline void RespResolveFileHash::clear_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.ClearToEmpty();
+}
+inline const std::string& RespResolveFileHash::message() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.RespResolveFileHash.message)
+  return _internal_message();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void RespResolveFileHash::set_message(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.RespResolveFileHash.message)
+}
+inline std::string* RespResolveFileHash::mutable_message() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_message();
+  // @@protoc_insertion_point(field_mutable:file.RespResolveFileHash.message)
+  return _s;
+}
+inline const std::string& RespResolveFileHash::_internal_message() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.message_.Get();
+}
+inline void RespResolveFileHash::_internal_set_message(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.Set(value, GetArena());
+}
+inline std::string* RespResolveFileHash::_internal_mutable_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.message_.Mutable( GetArena());
+}
+inline std::string* RespResolveFileHash::release_message() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.RespResolveFileHash.message)
+  return _impl_.message_.Release();
+}
+inline void RespResolveFileHash::set_allocated_message(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.message_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.message_.IsDefault()) {
+          _impl_.message_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.RespResolveFileHash.message)
+}
+
+// string file_hash = 3;
+inline void RespResolveFileHash::clear_file_hash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_hash_.ClearToEmpty();
+}
+inline const std::string& RespResolveFileHash::file_hash() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.RespResolveFileHash.file_hash)
+  return _internal_file_hash();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void RespResolveFileHash::set_file_hash(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_hash_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.RespResolveFileHash.file_hash)
+}
+inline std::string* RespResolveFileHash::mutable_file_hash() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_file_hash();
+  // @@protoc_insertion_point(field_mutable:file.RespResolveFileHash.file_hash)
+  return _s;
+}
+inline const std::string& RespResolveFileHash::_internal_file_hash() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.file_hash_.Get();
+}
+inline void RespResolveFileHash::_internal_set_file_hash(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_hash_.Set(value, GetArena());
+}
+inline std::string* RespResolveFileHash::_internal_mutable_file_hash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.file_hash_.Mutable( GetArena());
+}
+inline std::string* RespResolveFileHash::release_file_hash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.RespResolveFileHash.file_hash)
+  return _impl_.file_hash_.Release();
+}
+inline void RespResolveFileHash::set_allocated_file_hash(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_hash_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.file_hash_.IsDefault()) {
+          _impl_.file_hash_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.RespResolveFileHash.file_hash)
+}
+
+// int64 file_size = 4;
+inline void RespResolveFileHash::clear_file_size() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.file_size_ = ::int64_t{0};
+}
+inline ::int64_t RespResolveFileHash::file_size() const {
+  // @@protoc_insertion_point(field_get:file.RespResolveFileHash.file_size)
+  return _internal_file_size();
+}
+inline void RespResolveFileHash::set_file_size(::int64_t value) {
+  _internal_set_file_size(value);
+  // @@protoc_insertion_point(field_set:file.RespResolveFileHash.file_size)
+}
+inline ::int64_t RespResolveFileHash::_internal_file_size() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.file_size_;
+}
+inline void RespResolveFileHash::_internal_set_file_size(::int64_t value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.file_size_ = value;
 }

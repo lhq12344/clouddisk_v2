@@ -27,7 +27,7 @@ public:
 
 	METHOD_LIST_BEGIN
 	// use METHOD_ADD to add your custom processing function here;
-	ADD_METHOD_TO(AIController::aiRequest, "/AI", Post);
+	ADD_METHOD_TO(AIController::aiRequest, "/AI", Post, "jwt_decode");
 
 	METHOD_LIST_END
 	// your declaration of processing function maybe like this:

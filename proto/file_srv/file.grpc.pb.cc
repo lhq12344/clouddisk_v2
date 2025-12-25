@@ -26,6 +26,7 @@ static const char* fileService_method_names[] = {
   "/file.fileService/LoadFile",
   "/file.fileService/Showfile",
   "/file.fileService/filequeryinfo",
+  "/file.fileService/ResolveFileHash",
 };
 
 std::unique_ptr< fileService::Stub> fileService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
@@ -39,6 +40,7 @@ fileService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& channe
   , rpcmethod_LoadFile_(fileService_method_names[1], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_Showfile_(fileService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_filequeryinfo_(fileService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_ResolveFileHash_(fileService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
 
 ::grpc::Status fileService::Stub::filedowm(::grpc::ClientContext* context, const ::file::ReqFileDown& request, ::file::Resp* response) {
@@ -133,6 +135,29 @@ void fileService::Stub::async::filequeryinfo(::grpc::ClientContext* context, con
   return result;
 }
 
+::grpc::Status fileService::Stub::ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::file::RespResolveFileHash* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::ReqResolveFileHash, ::file::RespResolveFileHash, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_ResolveFileHash_, context, request, response);
+}
+
+void fileService::Stub::async::ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::ReqResolveFileHash, ::file::RespResolveFileHash, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_ResolveFileHash_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_ResolveFileHash_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* fileService::Stub::PrepareAsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::RespResolveFileHash, ::file::ReqResolveFileHash, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_ResolveFileHash_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* fileService::Stub::AsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncResolveFileHashRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
 fileService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       fileService_method_names[0],
@@ -174,6 +199,16 @@ fileService::Service::Service() {
              ::file::RespFileQuery* resp) {
                return service->filequeryinfo(ctx, req, resp);
              }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[4],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::ReqResolveFileHash, ::file::RespResolveFileHash, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::ReqResolveFileHash* req,
+             ::file::RespResolveFileHash* resp) {
+               return service->ResolveFileHash(ctx, req, resp);
+             }, this)));
 }
 
 fileService::Service::~Service() {
@@ -201,6 +236,13 @@ fileService::Service::~Service() {
 }
 
 ::grpc::Status fileService::Service::filequeryinfo(::grpc::ServerContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::ResolveFileHash(::grpc::ServerContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response) {
   (void) context;
   (void) request;
   (void) response;

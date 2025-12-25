@@ -111,7 +111,17 @@ void FileController::filequeryinfo(const HttpRequestPtr &req,
 		callback(resp);
 		return;
 	}
-
+	// 关键修复：强校验，禁止 0/空字符串继续走
+	if (userId <= 0 || name.empty())
+	{
+		Json::Value ret;
+		ret["error"] = "unauthorized";
+		ret["message"] = "invalid jwt claims (missing user id / username)";
+		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+		resp->setStatusCode(drogon::k401Unauthorized);
+		callback(resp);
+		return;
+	}
 	request->set_userid(std::to_string(userId));
 	request->set_username(name);
 	stub->async()->filequeryinfo(context.get(), request.get(), response.get(),

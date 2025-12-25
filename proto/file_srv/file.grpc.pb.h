@@ -63,6 +63,13 @@ class fileService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespFileQuery>> PrepareAsyncfilequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespFileQuery>>(PrepareAsyncfilequeryinfoRaw(context, request, cq));
     }
+    virtual ::grpc::Status ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::file::RespResolveFileHash* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>> AsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>>(AsyncResolveFileHashRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>> PrepareAsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>>(PrepareAsyncResolveFileHashRaw(context, request, cq));
+    }
     class async_interface {
      public:
       virtual ~async_interface() {}
@@ -74,6 +81,8 @@ class fileService final {
       virtual void Showfile(::grpc::ClientContext* context, const ::file::Reqshowfile* request, ::file::Resp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
       virtual void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, std::function<void(::grpc::Status)>) = 0;
       virtual void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, ::grpc::ClientUnaryReactor* reactor) = 0;
     };
     typedef class async_interface experimental_async_interface;
     virtual class async_interface* async() { return nullptr; }
@@ -87,6 +96,8 @@ class fileService final {
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::Resp>* PrepareAsyncShowfileRaw(::grpc::ClientContext* context, const ::file::Reqshowfile& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespFileQuery>* AsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespFileQuery>* PrepareAsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>* AsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>* PrepareAsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) = 0;
   };
   class Stub final : public StubInterface {
    public:
@@ -119,6 +130,13 @@ class fileService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespFileQuery>> PrepareAsyncfilequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespFileQuery>>(PrepareAsyncfilequeryinfoRaw(context, request, cq));
     }
+    ::grpc::Status ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::file::RespResolveFileHash* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>> AsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>>(AsyncResolveFileHashRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>> PrepareAsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>>(PrepareAsyncResolveFileHashRaw(context, request, cq));
+    }
     class async final :
       public StubInterface::async_interface {
      public:
@@ -130,6 +148,8 @@ class fileService final {
       void Showfile(::grpc::ClientContext* context, const ::file::Reqshowfile* request, ::file::Resp* response, ::grpc::ClientUnaryReactor* reactor) override;
       void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, std::function<void(::grpc::Status)>) override;
       void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, std::function<void(::grpc::Status)>) override;
+      void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, ::grpc::ClientUnaryReactor* reactor) override;
      private:
       friend class Stub;
       explicit async(Stub* stub): stub_(stub) { }
@@ -149,10 +169,13 @@ class fileService final {
     ::grpc::ClientAsyncResponseReader< ::file::Resp>* PrepareAsyncShowfileRaw(::grpc::ClientContext* context, const ::file::Reqshowfile& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::file::RespFileQuery>* AsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::file::RespFileQuery>* PrepareAsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* AsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* PrepareAsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) override;
     const ::grpc::internal::RpcMethod rpcmethod_filedowm_;
     const ::grpc::internal::RpcMethod rpcmethod_LoadFile_;
     const ::grpc::internal::RpcMethod rpcmethod_Showfile_;
     const ::grpc::internal::RpcMethod rpcmethod_filequeryinfo_;
+    const ::grpc::internal::RpcMethod rpcmethod_ResolveFileHash_;
   };
   static std::unique_ptr<Stub> NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options = ::grpc::StubOptions());
 
@@ -164,6 +187,7 @@ class fileService final {
     virtual ::grpc::Status LoadFile(::grpc::ServerContext* context, const ::file::Reqloadfile* request, ::file::Resp* response);
     virtual ::grpc::Status Showfile(::grpc::ServerContext* context, const ::file::Reqshowfile* request, ::file::Resp* response);
     virtual ::grpc::Status filequeryinfo(::grpc::ServerContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response);
+    virtual ::grpc::Status ResolveFileHash(::grpc::ServerContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response);
   };
   template <class BaseClass>
   class WithAsyncMethod_filedowm : public BaseClass {
@@ -245,7 +269,27 @@ class fileService final {
       ::grpc::Service::RequestAsyncUnary(3, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
-  typedef WithAsyncMethod_filedowm<WithAsyncMethod_LoadFile<WithAsyncMethod_Showfile<WithAsyncMethod_filequeryinfo<Service > > > > AsyncService;
+  template <class BaseClass>
+  class WithAsyncMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodAsync(4);
+    }
+    ~WithAsyncMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestResolveFileHash(::grpc::ServerContext* context, ::file::ReqResolveFileHash* request, ::grpc::ServerAsyncResponseWriter< ::file::RespResolveFileHash>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(4, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  typedef WithAsyncMethod_filedowm<WithAsyncMethod_LoadFile<WithAsyncMethod_Showfile<WithAsyncMethod_filequeryinfo<WithAsyncMethod_ResolveFileHash<Service > > > > > AsyncService;
   template <class BaseClass>
   class WithCallbackMethod_filedowm : public BaseClass {
    private:
@@ -354,7 +398,34 @@ class fileService final {
     virtual ::grpc::ServerUnaryReactor* filequeryinfo(
       ::grpc::CallbackServerContext* /*context*/, const ::file::ReqFileQuery* /*request*/, ::file::RespFileQuery* /*response*/)  { return nullptr; }
   };
-  typedef WithCallbackMethod_filedowm<WithCallbackMethod_LoadFile<WithCallbackMethod_Showfile<WithCallbackMethod_filequeryinfo<Service > > > > CallbackService;
+  template <class BaseClass>
+  class WithCallbackMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodCallback(4,
+          new ::grpc::internal::CallbackUnaryHandler< ::file::ReqResolveFileHash, ::file::RespResolveFileHash>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response) { return this->ResolveFileHash(context, request, response); }));}
+    void SetMessageAllocatorFor_ResolveFileHash(
+        ::grpc::MessageAllocator< ::file::ReqResolveFileHash, ::file::RespResolveFileHash>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(4);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::file::ReqResolveFileHash, ::file::RespResolveFileHash>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* ResolveFileHash(
+      ::grpc::CallbackServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/)  { return nullptr; }
+  };
+  typedef WithCallbackMethod_filedowm<WithCallbackMethod_LoadFile<WithCallbackMethod_Showfile<WithCallbackMethod_filequeryinfo<WithCallbackMethod_ResolveFileHash<Service > > > > > CallbackService;
   typedef CallbackService ExperimentalCallbackService;
   template <class BaseClass>
   class WithGenericMethod_filedowm : public BaseClass {
@@ -420,6 +491,23 @@ class fileService final {
     }
     // disable synchronous version of this method
     ::grpc::Status filequeryinfo(::grpc::ServerContext* /*context*/, const ::file::ReqFileQuery* /*request*/, ::file::RespFileQuery* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodGeneric(4);
+    }
+    ~WithGenericMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
       abort();
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
@@ -502,6 +590,26 @@ class fileService final {
     }
     void Requestfilequeryinfo(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
       ::grpc::Service::RequestAsyncUnary(3, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodRaw(4);
+    }
+    ~WithRawMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestResolveFileHash(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(4, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
   template <class BaseClass>
@@ -590,6 +698,28 @@ class fileService final {
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
     virtual ::grpc::ServerUnaryReactor* filequeryinfo(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodRawCallback(4,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->ResolveFileHash(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* ResolveFileHash(
       ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
   };
   template <class BaseClass>
@@ -700,9 +830,36 @@ class fileService final {
     // replace default version of method with streamed unary
     virtual ::grpc::Status Streamedfilequeryinfo(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::ReqFileQuery,::file::RespFileQuery>* server_unary_streamer) = 0;
   };
-  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<Service > > > > StreamedUnaryService;
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_ResolveFileHash : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_ResolveFileHash() {
+      ::grpc::Service::MarkMethodStreamed(4,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::file::ReqResolveFileHash, ::file::RespResolveFileHash>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::file::ReqResolveFileHash, ::file::RespResolveFileHash>* streamer) {
+                       return this->StreamedResolveFileHash(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_ResolveFileHash() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedResolveFileHash(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::ReqResolveFileHash,::file::RespResolveFileHash>* server_unary_streamer) = 0;
+  };
+  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<Service > > > > > StreamedUnaryService;
   typedef Service SplitStreamedService;
-  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<Service > > > > StreamedService;
+  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<Service > > > > > StreamedService;
 };
 
 }  // namespace file
