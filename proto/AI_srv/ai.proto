@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package AI;
+option go_package = "clouddisk_v2/file_srv/protobuf;aipb";
+
+message AIReq{
+  string username  = 1;
+  string userid    = 2;
+  string filename  = 3;
+  string filehash  = 4;
+  int32  file_size = 5;
+  string query     = 6;
+}
+
+message AIResp {
+  int32  code    = 1;
+  string message = 2;
+  string data    = 3;
+}
+
+// AIService provides AI-related file processing capabilities.
+service AIService {
+  // AIrequest processes an AI request for a file.
+  rpc AIrequest(AIReq) returns (AIResp) {}
+}

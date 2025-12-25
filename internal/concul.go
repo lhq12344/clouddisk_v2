@@ -16,6 +16,7 @@ import (
 // ConsulServiceConfig 服务注册结构体
 type ConsulServiceConfig struct {
 	Host string `mapstructure:"host"`
+	Port int    `mapstructure:"port"`
 }
 
 type ConsulConfig struct {
@@ -23,6 +24,7 @@ type ConsulConfig struct {
 	Port       string              `mapstructure:"port"`
 	AccountSrv ConsulServiceConfig `mapstructure:"account_srv"`
 	FileSrv    ConsulServiceConfig `mapstructure:"file_srv"`
+	MCPSrv     ConsulServiceConfig `mapstructure:"mcp_srv"`
 }
 
 var (
@@ -46,7 +48,6 @@ func InitConsul() {
 			return
 		}
 		ConsulClient = client
-		return
 	})
 }
 

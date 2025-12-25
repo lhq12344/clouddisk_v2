@@ -39,7 +39,6 @@ func InitKafkaProducer() {
 	}
 	KafkaProducer = producer
 	log.Logger.Info("[InitKafkaProducer]Kafka producer created")
-	return
 }
 
 // ProduceFileUploadMsg 发送消息到 Kafka

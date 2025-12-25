@@ -15,6 +15,10 @@
 #include "../../proto/account_srv/account.pb.h"
 #include "../../proto/file_srv/file.grpc.pb.h"
 #include "../../proto/file_srv/file.pb.h"
+#include "../../proto/file_srv/file.grpc.pb.h"
+#include "../../proto/file_srv/file.pb.h"
+#include "../../proto/AI_srv/ai.grpc.pb.h"
+#include "../../proto/AI_srv/ai.pb.h"
 using json = nlohmann::json;
 
 struct ServiceInstance
@@ -24,6 +28,7 @@ struct ServiceInstance
 	std::shared_ptr<grpc::Channel> channel;
 	std::shared_ptr<account::accountService::Stub> account_stub;
 	std::shared_ptr<file::fileService::Stub> file_stub;
+	std::shared_ptr<AI::AIService::Stub> AI_stub;
 };
 
 class CloudiskConsul
