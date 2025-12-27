@@ -38,7 +38,7 @@ flowchart LR
   Client[Client/Web] --> Gateway[C++ Gateway]
   Gateway --> Services[Go Microservices]
   Services -->|gRPC/HTTP| Storage[Storage Service]
-  Services -->|Auth| JWT[JWT Service]
+  Gateway -->|Auth| JWT[JWT Service]
   Services -->|Metadata| MySQL[(MySQL)]
   Services --> Redis[(Redis)]
   Services --> MinIO[(MinIO)]
