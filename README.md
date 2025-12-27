@@ -51,6 +51,7 @@ flowchart LR
 
 ---
 
+<<<<<<< ours
 ## 📂 目录结构
 
 ```
@@ -61,6 +62,28 @@ flowchart LR
 ├── proto/                    # Protobuf / gRPC 协议定义
 ├── storage/                  # 存储相关资源
 └── scripts/                  # 工具脚本
+=======
+## 📂 目录结构（二级）
+
+```
+.
+├── backword_server/          # 后端服务集合
+│   ├── AI_server/            # AI/MCP 相关能力
+│   └── mcp_server/           # MCP Server 实现
+├── forward_part/             # C++ 网关与前置服务
+│   ├── gateway/              # 网关主程序（controllers/filters 等）
+│   ├── internal/             # C++ 内部通用组件（Consul 适配等）
+│   ├── config/               # 前置配置
+│   ├── logs/                 # 运行日志
+│   └── static/               # 静态资源
+├── other_srv/                # 其他服务
+│   ├── store_srv/            # Kafka 驱动的异步存储服务（kafka/localfile）
+│   └── email_srv/            # 邮件服务（Kafka + Redis + C++）
+├── internal/                 # Go 核心基础组件（配置/存储/JWT/DB等）
+├── proto/                    # Protobuf / gRPC 协议定义
+├── scripts/                  # 部署脚本（Nacos/Consul/Kafka/MinIO 等）
+└── storage/                  # 存储数据目录（hash 分片）
+>>>>>>> theirs
 ```
 
 ---
@@ -108,6 +131,7 @@ flowchart LR
 ## 🔧 功能实现细节（含 MCP 实现说明）
 
 ### ✅ MCP（Model Context Protocol）
+<<<<<<< ours
 项目中已预留 **MCP 服务接入点与依赖**，可作为 AI/工具服务的统一协议入口：
 
 - **依赖引入**：Go module 中已包含 `github.com/mark3labs/mcp-go` 依赖。
@@ -117,6 +141,13 @@ flowchart LR
 
 > **说明**：当前仓库中尚未看到具体的 MCP Server 启动逻辑，但已具备依赖与服务注册基础设施，
 > 可在新增 MCP 服务时通过 `RegisterGrpcService` 注册 Consul，并使用 `mcp-go` 实现 MCP Server。
+=======
+项目中的 MCP Server 位于后端服务目录：`backword_server/AI_server` 与 `backword_server/mcp_server`。
+
+- **实现位置**：`backword_server/AI_server`、`backword_server/mcp_server`
+- **依赖引入**：Go module 中已包含 `github.com/mark3labs/mcp-go` 依赖（`go.mod`）。
+- **服务发现配置**：配置中心中已预留 MCP 服务注册配置项（`internal/concul.go` 中的 `ConsulConfig.MCPSrv`）。
+>>>>>>> theirs
 
 ---
 
@@ -148,4 +179,7 @@ flowchart LR
 ## 🙌 贡献
 
 欢迎提交 Issue / PR 共同完善此云盘系统。只需确保遵循目录结构与编码规范。
+<<<<<<< ours
 
+=======
+>>>>>>> theirs
