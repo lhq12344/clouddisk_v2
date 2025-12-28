@@ -4,7 +4,7 @@
 #include "../../../proto/file_srv/file.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include "../ArcCache/ArcCache.h"
-#include "../ArcCache/ArcCacheNode.h"
+#include "../ArcCache/ARCtemp.h"
 #include "../../internal/internal.h"
 #include "../../internal/consul.h"
 #include <jsoncpp/json/json.h>
@@ -17,8 +17,8 @@ class FileController : public drogon::HttpController<FileController>
 {
 private:
 	const int CAPACITY;
-	mutable Cache::KArcCache<std::string, ServiceInstance> cache_;
-	std::shared_ptr<file::fileService::Stub> FindService(const std::string &key) const;
+	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
+	std::shared_ptr<file::fileService::Stub> FileController::FindService(const std::string &key) const;
 
 public:
 	FileController()

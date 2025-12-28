@@ -4,7 +4,7 @@
 #include "../../../proto/account_srv/account.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include "../ArcCache/ArcCache.h"
-#include "../ArcCache/ArcCacheNode.h"
+#include "../ArcCache/ARCtemp.h"
 #include "../../internal/internal.h"
 #include "../../internal/consul.h"
 #include <jsoncpp/json/json.h>
@@ -17,8 +17,8 @@ class AccountController : public drogon::HttpController<AccountController>
 {
 private:
 	const int CAPACITY;
-	mutable Cache::KArcCache<std::string, ServiceInstance> cache_;
-	std::shared_ptr<account::accountService::Stub> FindService(const std::string &key) const;
+	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<account::accountService>>> cache_;
+	std::shared_ptr<account::accountService::Stub> AccountController::FindService(const std::string &key) const;
 
 public:
 	AccountController()

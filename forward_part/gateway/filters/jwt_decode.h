@@ -1,9 +1,3 @@
-/**
- *
- *  jwt_decode.h
- *
- */
-
 #pragma once
 
 #include <drogon/HttpFilter.h>

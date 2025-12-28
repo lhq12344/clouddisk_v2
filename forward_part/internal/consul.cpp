@@ -107,15 +107,16 @@ size_t CloudiskConsul::WriteCallback(void *contents, size_t size, size_t nmemb, 
 /*
  * 从 Consul 获取服务实例列表
  */
-std::vector<ServiceInstance> CloudiskConsul::getServiceInstances(const std::string &serviceName)
+std::vector<BasicInstance> CloudiskConsul::getServiceInstances(const std::string &serviceName)
 {
-	std::vector<ServiceInstance> instances;
+	std::vector<BasicInstance> instances;
 
 	CURL *curl = curl_easy_init();
 	if (!curl)
 		return instances;
 
-	std::string url = "http://" + consulHost + ":" + std::to_string(consulPort) + "/v1/health/service/" + serviceName + "?passing";
+	// 推荐明确 passing=true
+	std::string url = "http://" + consulHost + ":" + std::to_string(consulPort) + "/v1/health/service/" + serviceName + "?passing=true";
 
 	std::string response;
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -123,15 +124,13 @@ std::vector<ServiceInstance> CloudiskConsul::getServiceInstances(const std::stri
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
 	CURLcode res = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
+
 	if (res != CURLE_OK)
 	{
-		std::cerr << "[ServiceDiscovery] Request failed: "
-				  << curl_easy_strerror(res) << "\n";
-		curl_easy_cleanup(curl);
+		std::cerr << "[ServiceDiscovery] Request failed: " << curl_easy_strerror(res) << "\n";
 		return instances;
 	}
-
-	curl_easy_cleanup(curl);
 
 	try
 	{
@@ -140,10 +139,17 @@ std::vector<ServiceInstance> CloudiskConsul::getServiceInstances(const std::stri
 		for (auto &item : arr)
 		{
 			auto srv = item["Service"];
-			ServiceInstance inst{
-				srv["Address"].get<std::string>(),
-				srv["Port"].get<int>()};
-			instances.push_back(inst);
+			auto node = item["Node"];
+
+			std::string addr = srv["Address"].get<std::string>();
+			if (addr.empty())
+			{
+				// 回退到 Node.Address（Consul 常见行为）
+				addr = node["Address"].get<std::string>();
+			}
+			int port = srv["Port"].get<int>();
+
+			instances.push_back(BasicInstance{addr, port});
 		}
 	}
 	catch (const std::exception &e)
@@ -154,10 +160,7 @@ std::vector<ServiceInstance> CloudiskConsul::getServiceInstances(const std::stri
 	return instances;
 }
 
-/*
- * 随机负载均衡：返回一个实例
- */
-ServiceInstance CloudiskConsul::getRandomInstance(const std::string &svc)
+BasicInstance CloudiskConsul::getRandomInstance(const std::string &svc)
 {
 	auto list = getServiceInstances(svc);
 	if (list.empty())
@@ -165,15 +168,11 @@ ServiceInstance CloudiskConsul::getRandomInstance(const std::string &svc)
 
 	std::random_device rd;
 	std::mt19937 gen(rd());
-	std::uniform_int_distribution<> dis(0, list.size() - 1);
-
+	std::uniform_int_distribution<> dis(0, (int)list.size() - 1);
 	return list[dis(gen)];
 }
 
-/*
- * 轮询负载均衡：每次取下一个实例
- */
-ServiceInstance CloudiskConsul::getRoundRobinInstance(const std::string &svc)
+BasicInstance CloudiskConsul::getRoundRobinInstance(const std::string &svc)
 {
 	auto list = getServiceInstances(svc);
 	if (list.empty())

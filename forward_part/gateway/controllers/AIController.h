@@ -4,7 +4,7 @@
 #include "../../../proto/AI_srv/ai.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include "../ArcCache/ArcCache.h"
-#include "../ArcCache/ArcCacheNode.h"
+#include "../ArcCache/ARCtemp.h"
 #include "../../internal/internal.h"
 #include "../../internal/consul.h"
 #include <jsoncpp/json/json.h>
@@ -17,8 +17,8 @@ class AIController : public drogon::HttpController<AIController>
 {
 private:
 	const int CAPACITY;
-	mutable Cache::KArcCache<std::string, ServiceInstance> cache_;
-	std::shared_ptr<AI::AIService::Stub> FindService(const std::string &key) const;
+	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<AI::AIService>>> cache_;
+	std::shared_ptr<AI::AIService::Stub> AIController::FindService(const std::string &key) const;
 
 public:
 	AIController()

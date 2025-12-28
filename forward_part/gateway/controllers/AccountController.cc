@@ -20,40 +20,15 @@ static bool isChannelReady(std::shared_ptr<grpc::Channel> channel)
 	return state == GRPC_CHANNEL_READY;
 }
 
-std::shared_ptr<account::accountService::Stub> AccountController::FindService(const std::string &key) const
+std::shared_ptr<account::accountService::Stub>
+AccountController::FindService(const std::string &key) const
 {
-	ServiceInstance value;
+	CloudiskConsul consul(MyAppData::instance().consulHost, MyAppData::instance().consulPort);
 
-	// 1. 尝试从缓存取
-	if (cache_.get(key, value))
-	{
-		if (value.channel && isChannelReady(value.channel))
-		{
-			LOG_INFO("[ARC] HIT key = {}, addr = {}:{}", key, value.address, value.port);
-			return value.account_stub; // ✔缓存有效
-		}
-		LOG_INFO("[ARC] MISS key = {}", key);
-	}
-	// 2. 未命中缓存 → 去 Consul 查询
-	std::string host = MyAppData::instance().consulHost;
-	int port = MyAppData::instance().consulPort;
-	CloudiskConsul consul(host, port);
-	value = consul.getRoundRobinInstance(key);
-
-	if (value.address.empty())
-	{
-		LOG_ERROR("[FindService] No available instance for {}", key);
-		return nullptr;
-	}
-	LOG_INFO("[FindService] Use instance {}:{} for {}", value.address, value.port, key);
-
-	// 3. 为当前 address:port 创建唯一的 channel + stub，并放缓存
-	std::string addr = value.address + ":" + std::to_string(value.port);
-	value.channel = grpc::CreateChannel(addr, grpc::InsecureChannelCredentials());
-	value.account_stub = account::accountService::NewStub(value.channel);
-	cache_.put(key, value); // ← 必须写回缓存
-
-	return value.account_stub;
+	return ArcGrpcLB::FindService<account::accountService>(
+		cache_, consul, key, 10,
+		[](const std::shared_ptr<grpc::Channel> &ch)
+		{ return isChannelReady(ch); });
 }
 
 void AccountController::signup(const drogon::HttpRequestPtr &req,
