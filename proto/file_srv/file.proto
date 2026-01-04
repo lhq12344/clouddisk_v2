@@ -94,12 +94,20 @@ message UploadPartReq {
 }
 
 message UploadPartResp {
-  string etag = 1;
+  string upload_id   = 1;
+  int32  part_number = 2;
+  int64  part_size   = 3;
+  string etag        = 4;
 }
 
 message CompleteReq { string upload_id = 1; }
 
-message CompleteResp { string object_key = 1; }
+message CompleteResp {
+  string upload_id  = 1;
+  string object_key = 2;
+  string etag       = 3;
+  string status     = 4;
+}
 
 message AbortReq { string upload_id = 1; }
 

@@ -248,9 +248,28 @@ class UploadPartResp final : public ::google::protobuf::Message
 
   // accessors -------------------------------------------------------
   enum : int {
-    kEtagFieldNumber = 1,
+    kUploadIdFieldNumber = 1,
+    kEtagFieldNumber = 4,
+    kPartSizeFieldNumber = 3,
+    kPartNumberFieldNumber = 2,
   };
-  // string etag = 1;
+  // string upload_id = 1;
+  void clear_upload_id() ;
+  const std::string& upload_id() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_upload_id(Arg_&& arg, Args_... args);
+  std::string* mutable_upload_id();
+  PROTOBUF_NODISCARD std::string* release_upload_id();
+  void set_allocated_upload_id(std::string* value);
+
+  private:
+  const std::string& _internal_upload_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_upload_id(
+      const std::string& value);
+  std::string* _internal_mutable_upload_id();
+
+  public:
+  // string etag = 4;
   void clear_etag() ;
   const std::string& etag() const;
   template <typename Arg_ = const std::string&, typename... Args_>
@@ -266,13 +285,33 @@ class UploadPartResp final : public ::google::protobuf::Message
   std::string* _internal_mutable_etag();
 
   public:
+  // int64 part_size = 3;
+  void clear_part_size() ;
+  ::int64_t part_size() const;
+  void set_part_size(::int64_t value);
+
+  private:
+  ::int64_t _internal_part_size() const;
+  void _internal_set_part_size(::int64_t value);
+
+  public:
+  // int32 part_number = 2;
+  void clear_part_number() ;
+  ::int32_t part_number() const;
+  void set_part_number(::int32_t value);
+
+  private:
+  ::int32_t _internal_part_number() const;
+  void _internal_set_part_number(::int32_t value);
+
+  public:
   // @@protoc_insertion_point(class_scope:file.UploadPartResp)
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
   static const ::google::protobuf::internal::TcParseTable<
-      0, 1, 0,
-      32, 2>
+      2, 4, 0,
+      41, 2>
       _table_;
 
   static constexpr const void* _raw_default_instance_ =
@@ -292,7 +331,10 @@ class UploadPartResp final : public ::google::protobuf::Message
     inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
                           ::google::protobuf::Arena* arena, const Impl_& from,
                           const UploadPartResp& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr upload_id_;
     ::google::protobuf::internal::ArenaStringPtr etag_;
+    ::int64_t part_size_;
+    ::int32_t part_number_;
     mutable ::google::protobuf::internal::CachedSize _cached_size_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -3263,9 +3305,28 @@ class CompleteResp final : public ::google::protobuf::Message
 
   // accessors -------------------------------------------------------
   enum : int {
-    kObjectKeyFieldNumber = 1,
+    kUploadIdFieldNumber = 1,
+    kObjectKeyFieldNumber = 2,
+    kEtagFieldNumber = 3,
+    kStatusFieldNumber = 4,
   };
-  // string object_key = 1;
+  // string upload_id = 1;
+  void clear_upload_id() ;
+  const std::string& upload_id() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_upload_id(Arg_&& arg, Args_... args);
+  std::string* mutable_upload_id();
+  PROTOBUF_NODISCARD std::string* release_upload_id();
+  void set_allocated_upload_id(std::string* value);
+
+  private:
+  const std::string& _internal_upload_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_upload_id(
+      const std::string& value);
+  std::string* _internal_mutable_upload_id();
+
+  public:
+  // string object_key = 2;
   void clear_object_key() ;
   const std::string& object_key() const;
   template <typename Arg_ = const std::string&, typename... Args_>
@@ -3281,13 +3342,45 @@ class CompleteResp final : public ::google::protobuf::Message
   std::string* _internal_mutable_object_key();
 
   public:
+  // string etag = 3;
+  void clear_etag() ;
+  const std::string& etag() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_etag(Arg_&& arg, Args_... args);
+  std::string* mutable_etag();
+  PROTOBUF_NODISCARD std::string* release_etag();
+  void set_allocated_etag(std::string* value);
+
+  private:
+  const std::string& _internal_etag() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_etag(
+      const std::string& value);
+  std::string* _internal_mutable_etag();
+
+  public:
+  // string status = 4;
+  void clear_status() ;
+  const std::string& status() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_status(Arg_&& arg, Args_... args);
+  std::string* mutable_status();
+  PROTOBUF_NODISCARD std::string* release_status();
+  void set_allocated_status(std::string* value);
+
+  private:
+  const std::string& _internal_status() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_status(
+      const std::string& value);
+  std::string* _internal_mutable_status();
+
+  public:
   // @@protoc_insertion_point(class_scope:file.CompleteResp)
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
   static const ::google::protobuf::internal::TcParseTable<
-      0, 1, 0,
-      36, 2>
+      2, 4, 0,
+      55, 2>
       _table_;
 
   static constexpr const void* _raw_default_instance_ =
@@ -3307,7 +3400,10 @@ class CompleteResp final : public ::google::protobuf::Message
     inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
                           ::google::protobuf::Arena* arena, const Impl_& from,
                           const CompleteResp& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr upload_id_;
     ::google::protobuf::internal::ArenaStringPtr object_key_;
+    ::google::protobuf::internal::ArenaStringPtr etag_;
+    ::google::protobuf::internal::ArenaStringPtr status_;
     mutable ::google::protobuf::internal::CachedSize _cached_size_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -6460,7 +6556,101 @@ inline UploadPartReq::PayloadCase UploadPartReq::payload_case() const {
 
 // UploadPartResp
 
-// string etag = 1;
+// string upload_id = 1;
+inline void UploadPartResp::clear_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.ClearToEmpty();
+}
+inline const std::string& UploadPartResp::upload_id() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.UploadPartResp.upload_id)
+  return _internal_upload_id();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void UploadPartResp::set_upload_id(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.UploadPartResp.upload_id)
+}
+inline std::string* UploadPartResp::mutable_upload_id() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_upload_id();
+  // @@protoc_insertion_point(field_mutable:file.UploadPartResp.upload_id)
+  return _s;
+}
+inline const std::string& UploadPartResp::_internal_upload_id() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.upload_id_.Get();
+}
+inline void UploadPartResp::_internal_set_upload_id(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.Set(value, GetArena());
+}
+inline std::string* UploadPartResp::_internal_mutable_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.upload_id_.Mutable( GetArena());
+}
+inline std::string* UploadPartResp::release_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.UploadPartResp.upload_id)
+  return _impl_.upload_id_.Release();
+}
+inline void UploadPartResp::set_allocated_upload_id(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.upload_id_.IsDefault()) {
+          _impl_.upload_id_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.UploadPartResp.upload_id)
+}
+
+// int32 part_number = 2;
+inline void UploadPartResp::clear_part_number() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.part_number_ = 0;
+}
+inline ::int32_t UploadPartResp::part_number() const {
+  // @@protoc_insertion_point(field_get:file.UploadPartResp.part_number)
+  return _internal_part_number();
+}
+inline void UploadPartResp::set_part_number(::int32_t value) {
+  _internal_set_part_number(value);
+  // @@protoc_insertion_point(field_set:file.UploadPartResp.part_number)
+}
+inline ::int32_t UploadPartResp::_internal_part_number() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.part_number_;
+}
+inline void UploadPartResp::_internal_set_part_number(::int32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.part_number_ = value;
+}
+
+// int64 part_size = 3;
+inline void UploadPartResp::clear_part_size() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.part_size_ = ::int64_t{0};
+}
+inline ::int64_t UploadPartResp::part_size() const {
+  // @@protoc_insertion_point(field_get:file.UploadPartResp.part_size)
+  return _internal_part_size();
+}
+inline void UploadPartResp::set_part_size(::int64_t value) {
+  _internal_set_part_size(value);
+  // @@protoc_insertion_point(field_set:file.UploadPartResp.part_size)
+}
+inline ::int64_t UploadPartResp::_internal_part_size() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.part_size_;
+}
+inline void UploadPartResp::_internal_set_part_size(::int64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.part_size_ = value;
+}
+
+// string etag = 4;
 inline void UploadPartResp::clear_etag() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.etag_.ClearToEmpty();
@@ -6568,7 +6758,57 @@ inline void CompleteReq::set_allocated_upload_id(std::string* value) {
 
 // CompleteResp
 
-// string object_key = 1;
+// string upload_id = 1;
+inline void CompleteResp::clear_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.ClearToEmpty();
+}
+inline const std::string& CompleteResp::upload_id() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.CompleteResp.upload_id)
+  return _internal_upload_id();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void CompleteResp::set_upload_id(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.CompleteResp.upload_id)
+}
+inline std::string* CompleteResp::mutable_upload_id() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_upload_id();
+  // @@protoc_insertion_point(field_mutable:file.CompleteResp.upload_id)
+  return _s;
+}
+inline const std::string& CompleteResp::_internal_upload_id() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.upload_id_.Get();
+}
+inline void CompleteResp::_internal_set_upload_id(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.Set(value, GetArena());
+}
+inline std::string* CompleteResp::_internal_mutable_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.upload_id_.Mutable( GetArena());
+}
+inline std::string* CompleteResp::release_upload_id() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.CompleteResp.upload_id)
+  return _impl_.upload_id_.Release();
+}
+inline void CompleteResp::set_allocated_upload_id(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.upload_id_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.upload_id_.IsDefault()) {
+          _impl_.upload_id_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.CompleteResp.upload_id)
+}
+
+// string object_key = 2;
 inline void CompleteResp::clear_object_key() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.object_key_.ClearToEmpty();
@@ -6616,6 +6856,106 @@ inline void CompleteResp::set_allocated_object_key(std::string* value) {
         }
   #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:file.CompleteResp.object_key)
+}
+
+// string etag = 3;
+inline void CompleteResp::clear_etag() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.etag_.ClearToEmpty();
+}
+inline const std::string& CompleteResp::etag() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.CompleteResp.etag)
+  return _internal_etag();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void CompleteResp::set_etag(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.etag_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.CompleteResp.etag)
+}
+inline std::string* CompleteResp::mutable_etag() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_etag();
+  // @@protoc_insertion_point(field_mutable:file.CompleteResp.etag)
+  return _s;
+}
+inline const std::string& CompleteResp::_internal_etag() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.etag_.Get();
+}
+inline void CompleteResp::_internal_set_etag(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.etag_.Set(value, GetArena());
+}
+inline std::string* CompleteResp::_internal_mutable_etag() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.etag_.Mutable( GetArena());
+}
+inline std::string* CompleteResp::release_etag() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.CompleteResp.etag)
+  return _impl_.etag_.Release();
+}
+inline void CompleteResp::set_allocated_etag(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.etag_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.etag_.IsDefault()) {
+          _impl_.etag_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.CompleteResp.etag)
+}
+
+// string status = 4;
+inline void CompleteResp::clear_status() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.status_.ClearToEmpty();
+}
+inline const std::string& CompleteResp::status() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.CompleteResp.status)
+  return _internal_status();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void CompleteResp::set_status(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.status_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.CompleteResp.status)
+}
+inline std::string* CompleteResp::mutable_status() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_status();
+  // @@protoc_insertion_point(field_mutable:file.CompleteResp.status)
+  return _s;
+}
+inline const std::string& CompleteResp::_internal_status() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.status_.Get();
+}
+inline void CompleteResp::_internal_set_status(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.status_.Set(value, GetArena());
+}
+inline std::string* CompleteResp::_internal_mutable_status() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.status_.Mutable( GetArena());
+}
+inline std::string* CompleteResp::release_status() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.CompleteResp.status)
+  return _impl_.status_.Release();
+}
+inline void CompleteResp::set_allocated_status(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.status_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.status_.IsDefault()) {
+          _impl_.status_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.CompleteResp.status)
 }
 
 // -------------------------------------------------------------------

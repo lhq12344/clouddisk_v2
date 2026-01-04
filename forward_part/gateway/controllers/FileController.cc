@@ -536,7 +536,7 @@ void FileController::Uploadpart(const HttpRequestPtr &req,
 		return;
 	}
 
-	// 3) 统一从 Header 读取 meta（建议你前端固定用这套）
+	// 3) 统一从 Header 读取 meta
 	//    也可以改成从 URL path 取 upload_id/part_number，这里先按你现状走 header
 	const std::string uploadId = req->getHeader("X-Upload-Id");
 	const std::string partNoStr = req->getHeader("X-Part-Number");
@@ -598,7 +598,7 @@ void FileController::Uploadpart(const HttpRequestPtr &req,
 		partSize = ps;
 	}
 
-	// 5) 组装 gRPC meta（建议把 userId/name 一并带给 Go，避免 Go 再查）
+	// 5) 组装 gRPC meta
 	file::UploadPartMeta meta;
 	meta.set_upload_id(uploadId);
 	meta.set_part_number(partNumber);

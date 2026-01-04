@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -173,6 +175,93 @@ func (c *MINIOClient) MinIOPresignGetURL(objectKey string, expiry time.Duration)
 		return "", err
 	}
 	return u.String(), nil
+}
+func (c *MINIOClient) MinIOMultipartInit(
+	ctx context.Context,
+	objectKey string,
+	contentType string,
+	userMeta map[string]string,
+) (string, error) {
+	if c == nil || c.Client == nil {
+		return "", fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+
+	opts := minio.PutObjectOptions{
+		ContentType:  contentType,
+		UserMetadata: userMeta,
+	}
+
+	// Core.NewMultipartUpload(ctx, bucket, object, opts) (uploadID string, err error)
+	uploadID, err := core.NewMultipartUpload(ctx, c.Bucket, objectKey, opts)
+	if err != nil {
+		return "", err
+	}
+	return uploadID, nil
+}
+
+// MinIOMultipartPutPart：上传单个 Part，返回该 part 的 ETag
+func (c *MINIOClient) MinIOMultipartPutPart(
+	ctx context.Context,
+	objectKey string,
+	uploadID string,
+	partNumber int,
+	reader io.Reader,
+	partSize int64,
+	md5Base64 string, // 可选：如果你前端/网关有算好 MD5，可传；否则空字符串
+) (string, error) {
+	if c == nil || c.Client == nil {
+		return "", fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+
+	pop := minio.PutObjectPartOptions{}
+	if md5Base64 != "" {
+		// PutObjectPartOptions 里提供 Md5Base64/Sha256Hex 等字段 :contentReference[oaicite:2]{index=2}
+		pop.Md5Base64 = md5Base64
+	}
+
+	// Core.PutObjectPart(ctx, bucket, object, uploadID, partNumber, reader, size, opts) (etag string, err error)
+	objectPart, err := core.PutObjectPart(ctx, c.Bucket, objectKey, uploadID, partNumber, reader, partSize, pop)
+	if err != nil {
+		return "", err
+	}
+	return objectPart.ETag, nil
+}
+
+// MinIOMultipartComplete：Complete Multipart Upload
+func (c *MINIOClient) MinIOMultipartComplete(
+	ctx context.Context,
+	objectKey string,
+	uploadID string,
+	parts []minio.CompletePart, // 需要 partNumber + ETag
+	contentType string,
+	userMeta map[string]string,
+) (minio.UploadInfo, error) {
+	if c == nil || c.Client == nil {
+		return minio.UploadInfo{}, fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+
+	// S3/MinIO 要求 parts 按 PartNumber 升序
+	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
+
+	opts := minio.PutObjectOptions{
+		ContentType:  contentType,
+		UserMetadata: userMeta,
+	}
+
+	// Core.CompleteMultipartUpload(ctx, bucket, object, uploadID, parts, opts) (UploadInfo, error)
+	return core.CompleteMultipartUpload(ctx, c.Bucket, objectKey, uploadID, parts, opts)
+}
+
+// MinIOMultipartAbort：中止 Multipart Upload（异常/取消时用）
+func (c *MINIOClient) MinIOMultipartAbort(ctx context.Context, objectKey, uploadID string) error {
+	if c == nil || c.Client == nil {
+		return fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+	return core.AbortMultipartUpload(ctx, c.Bucket, objectKey, uploadID)
 }
 
 func InitMinio() {

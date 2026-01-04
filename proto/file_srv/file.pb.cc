@@ -27,9 +27,14 @@ namespace file {
 
 inline constexpr UploadPartResp::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
-      : etag_(
+      : upload_id_(
             &::google::protobuf::internal::fixed_address_empty_string,
             ::_pbi::ConstantInitialized()),
+        etag_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        part_size_{::int64_t{0}},
+        part_number_{0},
         _cached_size_{0} {}
 
 template <typename>
@@ -396,7 +401,16 @@ PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
 
 inline constexpr CompleteResp::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
-      : object_key_(
+      : upload_id_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        object_key_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        etag_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        status_(
             &::google::protobuf::internal::fixed_address_empty_string,
             ::_pbi::ConstantInitialized()),
         _cached_size_{0} {}
@@ -681,6 +695,9 @@ const ::uint32_t
         ~0u,  // no _inlined_string_donated_
         ~0u,  // no _split_
         ~0u,  // no sizeof(Split)
+        PROTOBUF_FIELD_OFFSET(::file::UploadPartResp, _impl_.upload_id_),
+        PROTOBUF_FIELD_OFFSET(::file::UploadPartResp, _impl_.part_number_),
+        PROTOBUF_FIELD_OFFSET(::file::UploadPartResp, _impl_.part_size_),
         PROTOBUF_FIELD_OFFSET(::file::UploadPartResp, _impl_.etag_),
         ~0u,  // no _has_bits_
         PROTOBUF_FIELD_OFFSET(::file::CompleteReq, _internal_metadata_),
@@ -699,7 +716,10 @@ const ::uint32_t
         ~0u,  // no _inlined_string_donated_
         ~0u,  // no _split_
         ~0u,  // no sizeof(Split)
+        PROTOBUF_FIELD_OFFSET(::file::CompleteResp, _impl_.upload_id_),
         PROTOBUF_FIELD_OFFSET(::file::CompleteResp, _impl_.object_key_),
+        PROTOBUF_FIELD_OFFSET(::file::CompleteResp, _impl_.etag_),
+        PROTOBUF_FIELD_OFFSET(::file::CompleteResp, _impl_.status_),
         ~0u,  // no _has_bits_
         PROTOBUF_FIELD_OFFSET(::file::AbortReq, _internal_metadata_),
         ~0u,  // no _extensions_
@@ -754,12 +774,12 @@ static const ::_pbi::MigrationSchema
         {131, -1, -1, sizeof(::file::UploadPartMeta)},
         {143, -1, -1, sizeof(::file::UploadPartReq)},
         {154, -1, -1, sizeof(::file::UploadPartResp)},
-        {163, -1, -1, sizeof(::file::CompleteReq)},
-        {172, -1, -1, sizeof(::file::CompleteResp)},
-        {181, -1, -1, sizeof(::file::AbortReq)},
-        {190, -1, -1, sizeof(::file::AbortResp)},
-        {198, -1, -1, sizeof(::file::StatusReq)},
-        {207, -1, -1, sizeof(::file::StatusResp)},
+        {166, -1, -1, sizeof(::file::CompleteReq)},
+        {175, -1, -1, sizeof(::file::CompleteResp)},
+        {187, -1, -1, sizeof(::file::AbortReq)},
+        {196, -1, -1, sizeof(::file::AbortResp)},
+        {204, -1, -1, sizeof(::file::StatusReq)},
+        {213, -1, -1, sizeof(::file::StatusResp)},
 };
 static const ::_pb::Message* const file_default_instances[] = {
     &::file::_ReqFileDown_default_instance_._instance,
@@ -813,34 +833,37 @@ const char descriptor_table_protodef_file_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIA
     "d_id\030\001 \001(\t\022\023\n\013part_number\030\002 \001(\005\022\021\n\tpart_"
     "size\030\003 \001(\003\022\022\n\nchunk_hash\030\004 \001(\t\"P\n\rUpload"
     "PartReq\022$\n\004meta\030\001 \001(\0132\024.file.UploadPartM"
-    "etaH\000\022\016\n\004data\030\002 \001(\014H\000B\t\n\007payload\"\036\n\016Uplo"
-    "adPartResp\022\014\n\004etag\030\001 \001(\t\" \n\013CompleteReq\022"
-    "\021\n\tupload_id\030\001 \001(\t\"\"\n\014CompleteResp\022\022\n\nob"
-    "ject_key\030\001 \001(\t\"\035\n\010AbortReq\022\021\n\tupload_id\030"
-    "\001 \001(\t\"\013\n\tAbortResp\"\036\n\tStatusReq\022\021\n\tuploa"
-    "d_id\030\001 \001(\t\"9\n\nStatusResp\022\023\n\013total_parts\030"
-    "\001 \001(\005\022\026\n\016uploaded_parts\030\002 \003(\0052\241\004\n\013fileSe"
-    "rvice\022+\n\010filedowm\022\021.file.ReqFileDown\032\n.f"
-    "ile.Resp\"\000\022+\n\010LoadFile\022\021.file.Reqloadfil"
-    "e\032\n.file.Resp\"\000\022+\n\010Showfile\022\021.file.Reqsh"
-    "owfile\032\n.file.Resp\"\000\022:\n\rfilequeryinfo\022\022."
-    "file.ReqFileQuery\032\023.file.RespFileQuery\"\000"
-    "\022H\n\017ResolveFileHash\022\030.file.ReqResolveFil"
-    "eHash\032\031.file.RespResolveFileHash\"\000\022.\n\rIn"
-    "itMultipart\022\r.file.InitReq\032\016.file.InitRe"
-    "sp\0229\n\nUploadPart\022\023.file.UploadPartReq\032\024."
-    "file.UploadPartResp(\001\022:\n\021CompleteMultipa"
-    "rt\022\021.file.CompleteReq\032\022.file.CompleteRes"
-    "p\0221\n\016AbortMultipart\022\016.file.AbortReq\032\017.fi"
-    "le.AbortResp\022+\n\006Status\022\017.file.StatusReq\032"
-    "\020.file.StatusRespB\'Z%clouddisk_v2/file_s"
-    "rv/protobuf;filepbb\006proto3"
+    "etaH\000\022\016\n\004data\030\002 \001(\014H\000B\t\n\007payload\"Y\n\016Uplo"
+    "adPartResp\022\021\n\tupload_id\030\001 \001(\t\022\023\n\013part_nu"
+    "mber\030\002 \001(\005\022\021\n\tpart_size\030\003 \001(\003\022\014\n\004etag\030\004 "
+    "\001(\t\" \n\013CompleteReq\022\021\n\tupload_id\030\001 \001(\t\"S\n"
+    "\014CompleteResp\022\021\n\tupload_id\030\001 \001(\t\022\022\n\nobje"
+    "ct_key\030\002 \001(\t\022\014\n\004etag\030\003 \001(\t\022\016\n\006status\030\004 \001"
+    "(\t\"\035\n\010AbortReq\022\021\n\tupload_id\030\001 \001(\t\"\013\n\tAbo"
+    "rtResp\"\036\n\tStatusReq\022\021\n\tupload_id\030\001 \001(\t\"9"
+    "\n\nStatusResp\022\023\n\013total_parts\030\001 \001(\005\022\026\n\016upl"
+    "oaded_parts\030\002 \003(\0052\241\004\n\013fileService\022+\n\010fil"
+    "edowm\022\021.file.ReqFileDown\032\n.file.Resp\"\000\022+"
+    "\n\010LoadFile\022\021.file.Reqloadfile\032\n.file.Res"
+    "p\"\000\022+\n\010Showfile\022\021.file.Reqshowfile\032\n.fil"
+    "e.Resp\"\000\022:\n\rfilequeryinfo\022\022.file.ReqFile"
+    "Query\032\023.file.RespFileQuery\"\000\022H\n\017ResolveF"
+    "ileHash\022\030.file.ReqResolveFileHash\032\031.file"
+    ".RespResolveFileHash\"\000\022.\n\rInitMultipart\022"
+    "\r.file.InitReq\032\016.file.InitResp\0229\n\nUpload"
+    "Part\022\023.file.UploadPartReq\032\024.file.UploadP"
+    "artResp(\001\022:\n\021CompleteMultipart\022\021.file.Co"
+    "mpleteReq\032\022.file.CompleteResp\0221\n\016AbortMu"
+    "ltipart\022\016.file.AbortReq\032\017.file.AbortResp"
+    "\022+\n\006Status\022\017.file.StatusReq\032\020.file.Statu"
+    "sRespB\'Z%clouddisk_v2/file_srv/protobuf;"
+    "filepbb\006proto3"
 };
 static ::absl::once_flag descriptor_table_file_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_file_2eproto = {
     false,
     false,
-    1986,
+    2094,
     descriptor_table_protodef_file_2eproto,
     "file.proto",
     &descriptor_table_file_2eproto_once,
@@ -4501,7 +4524,8 @@ UploadPartResp::UploadPartResp(::google::protobuf::Arena* arena)
 inline PROTOBUF_NDEBUG_INLINE UploadPartResp::Impl_::Impl_(
     ::google::protobuf::internal::InternalVisibility visibility, ::google::protobuf::Arena* arena,
     const Impl_& from, const ::file::UploadPartResp& from_msg)
-      : etag_(arena, from.etag_),
+      : upload_id_(arena, from.upload_id_),
+        etag_(arena, from.etag_),
         _cached_size_{0} {}
 
 UploadPartResp::UploadPartResp(
@@ -4513,17 +4537,31 @@ UploadPartResp::UploadPartResp(
   _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
       from._internal_metadata_);
   new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+  ::memcpy(reinterpret_cast<char *>(&_impl_) +
+               offsetof(Impl_, part_size_),
+           reinterpret_cast<const char *>(&from._impl_) +
+               offsetof(Impl_, part_size_),
+           offsetof(Impl_, part_number_) -
+               offsetof(Impl_, part_size_) +
+               sizeof(Impl_::part_number_));
 
   // @@protoc_insertion_point(copy_constructor:file.UploadPartResp)
 }
 inline PROTOBUF_NDEBUG_INLINE UploadPartResp::Impl_::Impl_(
     ::google::protobuf::internal::InternalVisibility visibility,
     ::google::protobuf::Arena* arena)
-      : etag_(arena),
+      : upload_id_(arena),
+        etag_(arena),
         _cached_size_{0} {}
 
 inline void UploadPartResp::SharedCtor(::_pb::Arena* arena) {
   new (&_impl_) Impl_(internal_visibility(), arena);
+  ::memset(reinterpret_cast<char *>(&_impl_) +
+               offsetof(Impl_, part_size_),
+           0,
+           offsetof(Impl_, part_number_) -
+               offsetof(Impl_, part_size_) +
+               sizeof(Impl_::part_number_));
 }
 UploadPartResp::~UploadPartResp() {
   // @@protoc_insertion_point(destructor:file.UploadPartResp)
@@ -4532,6 +4570,7 @@ UploadPartResp::~UploadPartResp() {
 }
 inline void UploadPartResp::SharedDtor() {
   ABSL_DCHECK(GetArena() == nullptr);
+  _impl_.upload_id_.Destroy();
   _impl_.etag_.Destroy();
   _impl_.~Impl_();
 }
@@ -4557,15 +4596,15 @@ UploadPartResp::GetClassData() const {
   return _data_.base();
 }
 PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
-const ::_pbi::TcParseTable<0, 1, 0, 32, 2> UploadPartResp::_table_ = {
+const ::_pbi::TcParseTable<2, 4, 0, 41, 2> UploadPartResp::_table_ = {
   {
     0,  // no _has_bits_
     0, // no _extensions_
-    1, 0,  // max_field_number, fast_idx_mask
+    4, 24,  // max_field_number, fast_idx_mask
     offsetof(decltype(_table_), field_lookup_table),
-    4294967294,  // skipmap
+    4294967280,  // skipmap
     offsetof(decltype(_table_), field_entries),
-    1,  // num_field_entries
+    4,  // num_field_entries
     0,  // num_aux_entries
     offsetof(decltype(_table_), field_names),  // no aux_entries
     &_UploadPartResp_default_instance_._instance,
@@ -4575,20 +4614,39 @@ const ::_pbi::TcParseTable<0, 1, 0, 32, 2> UploadPartResp::_table_ = {
     ::_pbi::TcParser::GetTable<::file::UploadPartResp>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // string etag = 1;
+    // string etag = 4;
     {::_pbi::TcParser::FastUS1,
-     {10, 63, 0, PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.etag_)}},
+     {34, 63, 0, PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.etag_)}},
+    // string upload_id = 1;
+    {::_pbi::TcParser::FastUS1,
+     {10, 63, 0, PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.upload_id_)}},
+    // int32 part_number = 2;
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(UploadPartResp, _impl_.part_number_), 63>(),
+     {16, 63, 0, PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_number_)}},
+    // int64 part_size = 3;
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint64_t, offsetof(UploadPartResp, _impl_.part_size_), 63>(),
+     {24, 63, 0, PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_size_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // string etag = 1;
+    // string upload_id = 1;
+    {PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.upload_id_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // int32 part_number = 2;
+    {PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_number_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kInt32)},
+    // int64 part_size = 3;
+    {PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_size_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kInt64)},
+    // string etag = 4;
     {PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.etag_), 0, 0,
     (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
   }},
   // no aux_entries
   {{
-    "\23\4\0\0\0\0\0\0"
+    "\23\11\0\0\4\0\0\0"
     "file.UploadPartResp"
+    "upload_id"
     "etag"
   }},
 };
@@ -4600,7 +4658,11 @@ PROTOBUF_NOINLINE void UploadPartResp::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
+  _impl_.upload_id_.ClearToEmpty();
   _impl_.etag_.ClearToEmpty();
+  ::memset(&_impl_.part_size_, 0, static_cast<::size_t>(
+      reinterpret_cast<char*>(&_impl_.part_number_) -
+      reinterpret_cast<char*>(&_impl_.part_size_)) + sizeof(_impl_.part_number_));
   _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
 }
 
@@ -4611,12 +4673,34 @@ PROTOBUF_NOINLINE void UploadPartResp::Clear() {
   ::uint32_t cached_has_bits = 0;
   (void)cached_has_bits;
 
-  // string etag = 1;
+  // string upload_id = 1;
+  if (!this->_internal_upload_id().empty()) {
+    const std::string& _s = this->_internal_upload_id();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.UploadPartResp.upload_id");
+    target = stream->WriteStringMaybeAliased(1, _s, target);
+  }
+
+  // int32 part_number = 2;
+  if (this->_internal_part_number() != 0) {
+    target = ::google::protobuf::internal::WireFormatLite::
+        WriteInt32ToArrayWithField<2>(
+            stream, this->_internal_part_number(), target);
+  }
+
+  // int64 part_size = 3;
+  if (this->_internal_part_size() != 0) {
+    target = ::google::protobuf::internal::WireFormatLite::
+        WriteInt64ToArrayWithField<3>(
+            stream, this->_internal_part_size(), target);
+  }
+
+  // string etag = 4;
   if (!this->_internal_etag().empty()) {
     const std::string& _s = this->_internal_etag();
     ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
         _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.UploadPartResp.etag");
-    target = stream->WriteStringMaybeAliased(1, _s, target);
+    target = stream->WriteStringMaybeAliased(4, _s, target);
   }
 
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
@@ -4636,10 +4720,29 @@ PROTOBUF_NOINLINE void UploadPartResp::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
-  // string etag = 1;
+  ::_pbi::Prefetch5LinesFrom7Lines(reinterpret_cast<const void*>(this));
+  // string upload_id = 1;
+  if (!this->_internal_upload_id().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_upload_id());
+  }
+
+  // string etag = 4;
   if (!this->_internal_etag().empty()) {
     total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
                                     this->_internal_etag());
+  }
+
+  // int64 part_size = 3;
+  if (this->_internal_part_size() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(
+        this->_internal_part_size());
+  }
+
+  // int32 part_number = 2;
+  if (this->_internal_part_number() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(
+        this->_internal_part_number());
   }
 
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
@@ -4654,8 +4757,17 @@ void UploadPartResp::MergeImpl(::google::protobuf::MessageLite& to_msg, const ::
   ::uint32_t cached_has_bits = 0;
   (void) cached_has_bits;
 
+  if (!from._internal_upload_id().empty()) {
+    _this->_internal_set_upload_id(from._internal_upload_id());
+  }
   if (!from._internal_etag().empty()) {
     _this->_internal_set_etag(from._internal_etag());
+  }
+  if (from._internal_part_size() != 0) {
+    _this->_impl_.part_size_ = from._impl_.part_size_;
+  }
+  if (from._internal_part_number() != 0) {
+    _this->_impl_.part_number_ = from._impl_.part_number_;
   }
   _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -4673,7 +4785,14 @@ void UploadPartResp::InternalSwap(UploadPartResp* PROTOBUF_RESTRICT other) {
   auto* arena = GetArena();
   ABSL_DCHECK_EQ(arena, other->GetArena());
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.upload_id_, &other->_impl_.upload_id_, arena);
   ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.etag_, &other->_impl_.etag_, arena);
+  ::google::protobuf::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_number_)
+      + sizeof(UploadPartResp::_impl_.part_number_)
+      - PROTOBUF_FIELD_OFFSET(UploadPartResp, _impl_.part_size_)>(
+          reinterpret_cast<char*>(&_impl_.part_size_),
+          reinterpret_cast<char*>(&other->_impl_.part_size_));
 }
 
 ::google::protobuf::Metadata UploadPartResp::GetMetadata() const {
@@ -4885,7 +5004,10 @@ CompleteResp::CompleteResp(::google::protobuf::Arena* arena)
 inline PROTOBUF_NDEBUG_INLINE CompleteResp::Impl_::Impl_(
     ::google::protobuf::internal::InternalVisibility visibility, ::google::protobuf::Arena* arena,
     const Impl_& from, const ::file::CompleteResp& from_msg)
-      : object_key_(arena, from.object_key_),
+      : upload_id_(arena, from.upload_id_),
+        object_key_(arena, from.object_key_),
+        etag_(arena, from.etag_),
+        status_(arena, from.status_),
         _cached_size_{0} {}
 
 CompleteResp::CompleteResp(
@@ -4903,7 +5025,10 @@ CompleteResp::CompleteResp(
 inline PROTOBUF_NDEBUG_INLINE CompleteResp::Impl_::Impl_(
     ::google::protobuf::internal::InternalVisibility visibility,
     ::google::protobuf::Arena* arena)
-      : object_key_(arena),
+      : upload_id_(arena),
+        object_key_(arena),
+        etag_(arena),
+        status_(arena),
         _cached_size_{0} {}
 
 inline void CompleteResp::SharedCtor(::_pb::Arena* arena) {
@@ -4916,7 +5041,10 @@ CompleteResp::~CompleteResp() {
 }
 inline void CompleteResp::SharedDtor() {
   ABSL_DCHECK(GetArena() == nullptr);
+  _impl_.upload_id_.Destroy();
   _impl_.object_key_.Destroy();
+  _impl_.etag_.Destroy();
+  _impl_.status_.Destroy();
   _impl_.~Impl_();
 }
 
@@ -4941,15 +5069,15 @@ CompleteResp::GetClassData() const {
   return _data_.base();
 }
 PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
-const ::_pbi::TcParseTable<0, 1, 0, 36, 2> CompleteResp::_table_ = {
+const ::_pbi::TcParseTable<2, 4, 0, 55, 2> CompleteResp::_table_ = {
   {
     0,  // no _has_bits_
     0, // no _extensions_
-    1, 0,  // max_field_number, fast_idx_mask
+    4, 24,  // max_field_number, fast_idx_mask
     offsetof(decltype(_table_), field_lookup_table),
-    4294967294,  // skipmap
+    4294967280,  // skipmap
     offsetof(decltype(_table_), field_entries),
-    1,  // num_field_entries
+    4,  // num_field_entries
     0,  // num_aux_entries
     offsetof(decltype(_table_), field_names),  // no aux_entries
     &_CompleteResp_default_instance_._instance,
@@ -4959,21 +5087,42 @@ const ::_pbi::TcParseTable<0, 1, 0, 36, 2> CompleteResp::_table_ = {
     ::_pbi::TcParser::GetTable<::file::CompleteResp>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // string object_key = 1;
+    // string status = 4;
     {::_pbi::TcParser::FastUS1,
-     {10, 63, 0, PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.object_key_)}},
+     {34, 63, 0, PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.status_)}},
+    // string upload_id = 1;
+    {::_pbi::TcParser::FastUS1,
+     {10, 63, 0, PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.upload_id_)}},
+    // string object_key = 2;
+    {::_pbi::TcParser::FastUS1,
+     {18, 63, 0, PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.object_key_)}},
+    // string etag = 3;
+    {::_pbi::TcParser::FastUS1,
+     {26, 63, 0, PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.etag_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // string object_key = 1;
+    // string upload_id = 1;
+    {PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.upload_id_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string object_key = 2;
     {PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.object_key_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string etag = 3;
+    {PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.etag_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string status = 4;
+    {PROTOBUF_FIELD_OFFSET(CompleteResp, _impl_.status_), 0, 0,
     (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
   }},
   // no aux_entries
   {{
-    "\21\12\0\0\0\0\0\0"
+    "\21\11\12\4\6\0\0\0"
     "file.CompleteResp"
+    "upload_id"
     "object_key"
+    "etag"
+    "status"
   }},
 };
 
@@ -4984,7 +5133,10 @@ PROTOBUF_NOINLINE void CompleteResp::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
+  _impl_.upload_id_.ClearToEmpty();
   _impl_.object_key_.ClearToEmpty();
+  _impl_.etag_.ClearToEmpty();
+  _impl_.status_.ClearToEmpty();
   _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
 }
 
@@ -4995,12 +5147,36 @@ PROTOBUF_NOINLINE void CompleteResp::Clear() {
   ::uint32_t cached_has_bits = 0;
   (void)cached_has_bits;
 
-  // string object_key = 1;
+  // string upload_id = 1;
+  if (!this->_internal_upload_id().empty()) {
+    const std::string& _s = this->_internal_upload_id();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.CompleteResp.upload_id");
+    target = stream->WriteStringMaybeAliased(1, _s, target);
+  }
+
+  // string object_key = 2;
   if (!this->_internal_object_key().empty()) {
     const std::string& _s = this->_internal_object_key();
     ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
         _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.CompleteResp.object_key");
-    target = stream->WriteStringMaybeAliased(1, _s, target);
+    target = stream->WriteStringMaybeAliased(2, _s, target);
+  }
+
+  // string etag = 3;
+  if (!this->_internal_etag().empty()) {
+    const std::string& _s = this->_internal_etag();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.CompleteResp.etag");
+    target = stream->WriteStringMaybeAliased(3, _s, target);
+  }
+
+  // string status = 4;
+  if (!this->_internal_status().empty()) {
+    const std::string& _s = this->_internal_status();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.CompleteResp.status");
+    target = stream->WriteStringMaybeAliased(4, _s, target);
   }
 
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
@@ -5020,10 +5196,29 @@ PROTOBUF_NOINLINE void CompleteResp::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
-  // string object_key = 1;
+  ::_pbi::Prefetch5LinesFrom7Lines(reinterpret_cast<const void*>(this));
+  // string upload_id = 1;
+  if (!this->_internal_upload_id().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_upload_id());
+  }
+
+  // string object_key = 2;
   if (!this->_internal_object_key().empty()) {
     total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
                                     this->_internal_object_key());
+  }
+
+  // string etag = 3;
+  if (!this->_internal_etag().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_etag());
+  }
+
+  // string status = 4;
+  if (!this->_internal_status().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_status());
   }
 
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
@@ -5038,8 +5233,17 @@ void CompleteResp::MergeImpl(::google::protobuf::MessageLite& to_msg, const ::go
   ::uint32_t cached_has_bits = 0;
   (void) cached_has_bits;
 
+  if (!from._internal_upload_id().empty()) {
+    _this->_internal_set_upload_id(from._internal_upload_id());
+  }
   if (!from._internal_object_key().empty()) {
     _this->_internal_set_object_key(from._internal_object_key());
+  }
+  if (!from._internal_etag().empty()) {
+    _this->_internal_set_etag(from._internal_etag());
+  }
+  if (!from._internal_status().empty()) {
+    _this->_internal_set_status(from._internal_status());
   }
   _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -5057,7 +5261,10 @@ void CompleteResp::InternalSwap(CompleteResp* PROTOBUF_RESTRICT other) {
   auto* arena = GetArena();
   ABSL_DCHECK_EQ(arena, other->GetArena());
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.upload_id_, &other->_impl_.upload_id_, arena);
   ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.object_key_, &other->_impl_.object_key_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.etag_, &other->_impl_.etag_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.status_, &other->_impl_.status_, arena);
 }
 
 ::google::protobuf::Metadata CompleteResp::GetMetadata() const {

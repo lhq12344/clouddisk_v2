@@ -12,15 +12,21 @@ type RedisConfig struct {
 	Port string `mapstructure:"port"`
 }
 
-var RedisClient *redis.Client
+// var RedisClient *redis.Client//只适合单机
+var RedisClient redis.UniversalClient //可以适用于哨兵/集群/单机
 
 func InitRedis() {
 	h := ViperConf.RedisConfig.Host
 	p := ViperConf.RedisConfig.Port
 	addr := fmt.Sprintf("%s:%s", h, p)
-	RedisClient = redis.NewClient(&redis.Options{
-		Addr: addr,
+	RedisClient = redis.NewUniversalClient(&redis.UniversalOptions{
+		Addrs: []string{addr},
+		//MasterName: "mymaster",
+		// DB: 0,
+		// Password: "...",//哨兵模式使用
 	})
-	ping := RedisClient.Ping(context.Background())
-	fmt.Println(ping.String())
+
+	if err := RedisClient.Ping(context.Background()).Err(); err != nil {
+		panic(err)
+	}
 }
