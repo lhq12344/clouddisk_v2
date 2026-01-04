@@ -73,6 +73,7 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 						t.session.MarkMessage(t.msg, "")
 					}
 				} else {
+					//TODO:这里可能出现消息丢失，应该加入inbox中，额外一个线程来再次提交
 					// 失败不 Mark，让 Kafka 重投（至少一次）
 					log.Logger.Error("[NewFileUploadConsumer]process message failed", zap.Error(err),
 						zap.Int32("partition", t.msg.Partition),

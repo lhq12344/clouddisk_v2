@@ -64,10 +64,64 @@ message RespResolveFileHash {
   int64  file_size = 4; // File.Size
 }
 
+message InitReq {
+  string user_id      = 1;
+  string file_name    = 2;
+  int64  file_size    = 3;
+  string file_hash    = 4;
+  string content_type = 5;
+}
+
+message InitResp {
+  string upload_id   = 1;
+  string object_key  = 2;
+  int64  part_size   = 3;
+  int32  total_parts = 4;
+}
+
+message UploadPartMeta {
+  string upload_id   = 1;
+  int32  part_number = 2; // 1..10000
+  int64  part_size   = 3; // bytes
+  string chunk_hash  = 4; // optional
+}
+
+message UploadPartReq {
+  oneof payload {
+    UploadPartMeta meta = 1; // first message
+    bytes          data = 2; // following messages
+  }
+}
+
+message UploadPartResp {
+  string etag = 1;
+}
+
+message CompleteReq { string upload_id = 1; }
+
+message CompleteResp { string object_key = 1; }
+
+message AbortReq { string upload_id = 1; }
+
+message AbortResp {}
+
+message StatusReq { string upload_id = 1; }
+
+message StatusResp {
+  int32          total_parts    = 1;
+  repeated int32 uploaded_parts = 2;
+}
+
 service fileService {
   rpc filedowm(ReqFileDown) returns (Resp) {}
   rpc LoadFile(Reqloadfile) returns (Resp) {}
   rpc Showfile(Reqshowfile) returns (Resp ) {}
   rpc filequeryinfo(ReqFileQuery) returns (RespFileQuery) {}
   rpc ResolveFileHash(ReqResolveFileHash) returns (RespResolveFileHash) {}
+
+  rpc InitMultipart(InitReq) returns (InitResp);
+  rpc UploadPart(stream UploadPartReq) returns (UploadPartResp);
+  rpc CompleteMultipart(CompleteReq) returns (CompleteResp);
+  rpc AbortMultipart(AbortReq) returns (AbortResp);
+  rpc Status(StatusReq) returns (StatusResp);
 }

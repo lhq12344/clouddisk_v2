@@ -27,6 +27,11 @@ static const char* fileService_method_names[] = {
   "/file.fileService/Showfile",
   "/file.fileService/filequeryinfo",
   "/file.fileService/ResolveFileHash",
+  "/file.fileService/InitMultipart",
+  "/file.fileService/UploadPart",
+  "/file.fileService/CompleteMultipart",
+  "/file.fileService/AbortMultipart",
+  "/file.fileService/Status",
 };
 
 std::unique_ptr< fileService::Stub> fileService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
@@ -41,6 +46,11 @@ fileService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& channe
   , rpcmethod_Showfile_(fileService_method_names[2], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_filequeryinfo_(fileService_method_names[3], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_ResolveFileHash_(fileService_method_names[4], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_InitMultipart_(fileService_method_names[5], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_UploadPart_(fileService_method_names[6], options.suffix_for_stats(),::grpc::internal::RpcMethod::CLIENT_STREAMING, channel)
+  , rpcmethod_CompleteMultipart_(fileService_method_names[7], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_AbortMultipart_(fileService_method_names[8], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_Status_(fileService_method_names[9], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
 
 ::grpc::Status fileService::Stub::filedowm(::grpc::ClientContext* context, const ::file::ReqFileDown& request, ::file::Resp* response) {
@@ -158,6 +168,114 @@ void fileService::Stub::async::ResolveFileHash(::grpc::ClientContext* context, c
   return result;
 }
 
+::grpc::Status fileService::Stub::InitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::file::InitResp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::InitReq, ::file::InitResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_InitMultipart_, context, request, response);
+}
+
+void fileService::Stub::async::InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::InitReq, ::file::InitResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_InitMultipart_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_InitMultipart_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::InitResp>* fileService::Stub::PrepareAsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::InitResp, ::file::InitReq, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_InitMultipart_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::InitResp>* fileService::Stub::AsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncInitMultipartRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
+::grpc::ClientWriter< ::file::UploadPartReq>* fileService::Stub::UploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response) {
+  return ::grpc::internal::ClientWriterFactory< ::file::UploadPartReq>::Create(channel_.get(), rpcmethod_UploadPart_, context, response);
+}
+
+void fileService::Stub::async::UploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::ClientWriteReactor< ::file::UploadPartReq>* reactor) {
+  ::grpc::internal::ClientCallbackWriterFactory< ::file::UploadPartReq>::Create(stub_->channel_.get(), stub_->rpcmethod_UploadPart_, context, response, reactor);
+}
+
+::grpc::ClientAsyncWriter< ::file::UploadPartReq>* fileService::Stub::AsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq, void* tag) {
+  return ::grpc::internal::ClientAsyncWriterFactory< ::file::UploadPartReq>::Create(channel_.get(), cq, rpcmethod_UploadPart_, context, response, true, tag);
+}
+
+::grpc::ClientAsyncWriter< ::file::UploadPartReq>* fileService::Stub::PrepareAsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncWriterFactory< ::file::UploadPartReq>::Create(channel_.get(), cq, rpcmethod_UploadPart_, context, response, false, nullptr);
+}
+
+::grpc::Status fileService::Stub::CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::file::CompleteResp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::CompleteReq, ::file::CompleteResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_CompleteMultipart_, context, request, response);
+}
+
+void fileService::Stub::async::CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::CompleteReq, ::file::CompleteResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_CompleteMultipart_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_CompleteMultipart_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::CompleteResp>* fileService::Stub::PrepareAsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::CompleteResp, ::file::CompleteReq, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_CompleteMultipart_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::CompleteResp>* fileService::Stub::AsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncCompleteMultipartRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
+::grpc::Status fileService::Stub::AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::file::AbortResp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::AbortReq, ::file::AbortResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_AbortMultipart_, context, request, response);
+}
+
+void fileService::Stub::async::AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::AbortReq, ::file::AbortResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_AbortMultipart_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_AbortMultipart_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::AbortResp>* fileService::Stub::PrepareAsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::AbortResp, ::file::AbortReq, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_AbortMultipart_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::AbortResp>* fileService::Stub::AsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncAbortMultipartRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
+::grpc::Status fileService::Stub::Status(::grpc::ClientContext* context, const ::file::StatusReq& request, ::file::StatusResp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::StatusReq, ::file::StatusResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_Status_, context, request, response);
+}
+
+void fileService::Stub::async::Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::StatusReq, ::file::StatusResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_Status_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_Status_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::StatusResp>* fileService::Stub::PrepareAsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::StatusResp, ::file::StatusReq, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_Status_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::StatusResp>* fileService::Stub::AsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncStatusRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
 fileService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       fileService_method_names[0],
@@ -209,6 +327,56 @@ fileService::Service::Service() {
              ::file::RespResolveFileHash* resp) {
                return service->ResolveFileHash(ctx, req, resp);
              }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[5],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::InitReq, ::file::InitResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::InitReq* req,
+             ::file::InitResp* resp) {
+               return service->InitMultipart(ctx, req, resp);
+             }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[6],
+      ::grpc::internal::RpcMethod::CLIENT_STREAMING,
+      new ::grpc::internal::ClientStreamingHandler< fileService::Service, ::file::UploadPartReq, ::file::UploadPartResp>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             ::grpc::ServerReader<::file::UploadPartReq>* reader,
+             ::file::UploadPartResp* resp) {
+               return service->UploadPart(ctx, reader, resp);
+             }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[7],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::CompleteReq, ::file::CompleteResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::CompleteReq* req,
+             ::file::CompleteResp* resp) {
+               return service->CompleteMultipart(ctx, req, resp);
+             }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[8],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::AbortReq, ::file::AbortResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::AbortReq* req,
+             ::file::AbortResp* resp) {
+               return service->AbortMultipart(ctx, req, resp);
+             }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[9],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::StatusReq, ::file::StatusResp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::StatusReq* req,
+             ::file::StatusResp* resp) {
+               return service->Status(ctx, req, resp);
+             }, this)));
 }
 
 fileService::Service::~Service() {
@@ -243,6 +411,41 @@ fileService::Service::~Service() {
 }
 
 ::grpc::Status fileService::Service::ResolveFileHash(::grpc::ServerContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::InitMultipart(::grpc::ServerContext* context, const ::file::InitReq* request, ::file::InitResp* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::UploadPart(::grpc::ServerContext* context, ::grpc::ServerReader< ::file::UploadPartReq>* reader, ::file::UploadPartResp* response) {
+  (void) context;
+  (void) reader;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::CompleteMultipart(::grpc::ServerContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::AbortMultipart(::grpc::ServerContext* context, const ::file::AbortReq* request, ::file::AbortResp* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::Status(::grpc::ServerContext* context, const ::file::StatusReq* request, ::file::StatusResp* response) {
   (void) context;
   (void) request;
   (void) response;

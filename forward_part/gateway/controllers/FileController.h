@@ -18,7 +18,7 @@ class FileController : public drogon::HttpController<FileController>
 private:
 	const int CAPACITY;
 	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
-	std::shared_ptr<file::fileService::Stub> FileController::FindService(const std::string &key) const;
+	std::shared_ptr<file::fileService::Stub> FindService(const std::string &key) const;
 
 public:
 	FileController()
@@ -30,6 +30,11 @@ public:
 	ADD_METHOD_TO(FileController::filedowm, "/file/download", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Showfile, "/file/showfile", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::Initupload, "/file/initupload", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::Uploadpart, "/file/uploadpart", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::CompleteMultipart, "/file/CompleteMultipart", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::AbortMultipart, "/file/AbortMultipart", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::Status, "/file/Status", Post, "jwt_decode");
 	METHOD_LIST_END
 
 	void filequeryinfo(const HttpRequestPtr &req,
@@ -40,4 +45,14 @@ public:
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void Showfile(const HttpRequestPtr &req,
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void Initupload(const HttpRequestPtr &req,
+					std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void Uploadpart(const HttpRequestPtr &req,
+					std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void CompleteMultipart(const HttpRequestPtr &req,
+						   std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void AbortMultipart(const HttpRequestPtr &req,
+						std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void Status(const HttpRequestPtr &req,
+				std::function<void(const HttpResponsePtr &)> &&callback) const;
 };

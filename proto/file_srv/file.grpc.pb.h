@@ -70,6 +70,43 @@ class fileService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>> PrepareAsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>>(PrepareAsyncResolveFileHashRaw(context, request, cq));
     }
+    virtual ::grpc::Status InitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::file::InitResp* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>> AsyncInitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>>(AsyncInitMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>> PrepareAsyncInitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>>(PrepareAsyncInitMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientWriterInterface< ::file::UploadPartReq>> UploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response) {
+      return std::unique_ptr< ::grpc::ClientWriterInterface< ::file::UploadPartReq>>(UploadPartRaw(context, response));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>> AsyncUploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq, void* tag) {
+      return std::unique_ptr< ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>>(AsyncUploadPartRaw(context, response, cq, tag));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>> PrepareAsyncUploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>>(PrepareAsyncUploadPartRaw(context, response, cq));
+    }
+    virtual ::grpc::Status CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::file::CompleteResp* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>> AsyncCompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>>(AsyncCompleteMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>> PrepareAsyncCompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>>(PrepareAsyncCompleteMultipartRaw(context, request, cq));
+    }
+    virtual ::grpc::Status AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::file::AbortResp* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>> AsyncAbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>>(AsyncAbortMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>> PrepareAsyncAbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>>(PrepareAsyncAbortMultipartRaw(context, request, cq));
+    }
+    virtual ::grpc::Status Status(::grpc::ClientContext* context, const ::file::StatusReq& request, ::file::StatusResp* response) = 0;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>> AsyncStatus(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>>(AsyncStatusRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>> PrepareAsyncStatus(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>>(PrepareAsyncStatusRaw(context, request, cq));
+    }
     class async_interface {
      public:
       virtual ~async_interface() {}
@@ -83,6 +120,15 @@ class fileService final {
       virtual void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, ::grpc::ClientUnaryReactor* reactor) = 0;
       virtual void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, std::function<void(::grpc::Status)>) = 0;
       virtual void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void UploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::ClientWriteReactor< ::file::UploadPartReq>* reactor) = 0;
+      virtual void CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
+      virtual void Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, std::function<void(::grpc::Status)>) = 0;
+      virtual void Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, ::grpc::ClientUnaryReactor* reactor) = 0;
     };
     typedef class async_interface experimental_async_interface;
     virtual class async_interface* async() { return nullptr; }
@@ -98,6 +144,17 @@ class fileService final {
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespFileQuery>* PrepareAsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>* AsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) = 0;
     virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::RespResolveFileHash>* PrepareAsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>* AsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::InitResp>* PrepareAsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientWriterInterface< ::file::UploadPartReq>* UploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response) = 0;
+    virtual ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>* AsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq, void* tag) = 0;
+    virtual ::grpc::ClientAsyncWriterInterface< ::file::UploadPartReq>* PrepareAsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>* AsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::CompleteResp>* PrepareAsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>* AsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::AbortResp>* PrepareAsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>* AsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) = 0;
+    virtual ::grpc::ClientAsyncResponseReaderInterface< ::file::StatusResp>* PrepareAsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) = 0;
   };
   class Stub final : public StubInterface {
    public:
@@ -137,6 +194,43 @@ class fileService final {
     std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>> PrepareAsyncResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) {
       return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>>(PrepareAsyncResolveFileHashRaw(context, request, cq));
     }
+    ::grpc::Status InitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::file::InitResp* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::InitResp>> AsyncInitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::InitResp>>(AsyncInitMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::InitResp>> PrepareAsyncInitMultipart(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::InitResp>>(PrepareAsyncInitMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientWriter< ::file::UploadPartReq>> UploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response) {
+      return std::unique_ptr< ::grpc::ClientWriter< ::file::UploadPartReq>>(UploadPartRaw(context, response));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncWriter< ::file::UploadPartReq>> AsyncUploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq, void* tag) {
+      return std::unique_ptr< ::grpc::ClientAsyncWriter< ::file::UploadPartReq>>(AsyncUploadPartRaw(context, response, cq, tag));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncWriter< ::file::UploadPartReq>> PrepareAsyncUploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncWriter< ::file::UploadPartReq>>(PrepareAsyncUploadPartRaw(context, response, cq));
+    }
+    ::grpc::Status CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::file::CompleteResp* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>> AsyncCompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>>(AsyncCompleteMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>> PrepareAsyncCompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>>(PrepareAsyncCompleteMultipartRaw(context, request, cq));
+    }
+    ::grpc::Status AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::file::AbortResp* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::AbortResp>> AsyncAbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::AbortResp>>(AsyncAbortMultipartRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::AbortResp>> PrepareAsyncAbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::AbortResp>>(PrepareAsyncAbortMultipartRaw(context, request, cq));
+    }
+    ::grpc::Status Status(::grpc::ClientContext* context, const ::file::StatusReq& request, ::file::StatusResp* response) override;
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::StatusResp>> AsyncStatus(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::StatusResp>>(AsyncStatusRaw(context, request, cq));
+    }
+    std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::StatusResp>> PrepareAsyncStatus(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) {
+      return std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::file::StatusResp>>(PrepareAsyncStatusRaw(context, request, cq));
+    }
     class async final :
       public StubInterface::async_interface {
      public:
@@ -150,6 +244,15 @@ class fileService final {
       void filequeryinfo(::grpc::ClientContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response, ::grpc::ClientUnaryReactor* reactor) override;
       void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, std::function<void(::grpc::Status)>) override;
       void ResolveFileHash(::grpc::ClientContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, std::function<void(::grpc::Status)>) override;
+      void InitMultipart(::grpc::ClientContext* context, const ::file::InitReq* request, ::file::InitResp* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void UploadPart(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::ClientWriteReactor< ::file::UploadPartReq>* reactor) override;
+      void CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, std::function<void(::grpc::Status)>) override;
+      void CompleteMultipart(::grpc::ClientContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, std::function<void(::grpc::Status)>) override;
+      void AbortMultipart(::grpc::ClientContext* context, const ::file::AbortReq* request, ::file::AbortResp* response, ::grpc::ClientUnaryReactor* reactor) override;
+      void Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, std::function<void(::grpc::Status)>) override;
+      void Status(::grpc::ClientContext* context, const ::file::StatusReq* request, ::file::StatusResp* response, ::grpc::ClientUnaryReactor* reactor) override;
      private:
       friend class Stub;
       explicit async(Stub* stub): stub_(stub) { }
@@ -171,11 +274,27 @@ class fileService final {
     ::grpc::ClientAsyncResponseReader< ::file::RespFileQuery>* PrepareAsyncfilequeryinfoRaw(::grpc::ClientContext* context, const ::file::ReqFileQuery& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* AsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) override;
     ::grpc::ClientAsyncResponseReader< ::file::RespResolveFileHash>* PrepareAsyncResolveFileHashRaw(::grpc::ClientContext* context, const ::file::ReqResolveFileHash& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::InitResp>* AsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::InitResp>* PrepareAsyncInitMultipartRaw(::grpc::ClientContext* context, const ::file::InitReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientWriter< ::file::UploadPartReq>* UploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response) override;
+    ::grpc::ClientAsyncWriter< ::file::UploadPartReq>* AsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq, void* tag) override;
+    ::grpc::ClientAsyncWriter< ::file::UploadPartReq>* PrepareAsyncUploadPartRaw(::grpc::ClientContext* context, ::file::UploadPartResp* response, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>* AsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::CompleteResp>* PrepareAsyncCompleteMultipartRaw(::grpc::ClientContext* context, const ::file::CompleteReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::AbortResp>* AsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::AbortResp>* PrepareAsyncAbortMultipartRaw(::grpc::ClientContext* context, const ::file::AbortReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::StatusResp>* AsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) override;
+    ::grpc::ClientAsyncResponseReader< ::file::StatusResp>* PrepareAsyncStatusRaw(::grpc::ClientContext* context, const ::file::StatusReq& request, ::grpc::CompletionQueue* cq) override;
     const ::grpc::internal::RpcMethod rpcmethod_filedowm_;
     const ::grpc::internal::RpcMethod rpcmethod_LoadFile_;
     const ::grpc::internal::RpcMethod rpcmethod_Showfile_;
     const ::grpc::internal::RpcMethod rpcmethod_filequeryinfo_;
     const ::grpc::internal::RpcMethod rpcmethod_ResolveFileHash_;
+    const ::grpc::internal::RpcMethod rpcmethod_InitMultipart_;
+    const ::grpc::internal::RpcMethod rpcmethod_UploadPart_;
+    const ::grpc::internal::RpcMethod rpcmethod_CompleteMultipart_;
+    const ::grpc::internal::RpcMethod rpcmethod_AbortMultipart_;
+    const ::grpc::internal::RpcMethod rpcmethod_Status_;
   };
   static std::unique_ptr<Stub> NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options = ::grpc::StubOptions());
 
@@ -188,6 +307,11 @@ class fileService final {
     virtual ::grpc::Status Showfile(::grpc::ServerContext* context, const ::file::Reqshowfile* request, ::file::Resp* response);
     virtual ::grpc::Status filequeryinfo(::grpc::ServerContext* context, const ::file::ReqFileQuery* request, ::file::RespFileQuery* response);
     virtual ::grpc::Status ResolveFileHash(::grpc::ServerContext* context, const ::file::ReqResolveFileHash* request, ::file::RespResolveFileHash* response);
+    virtual ::grpc::Status InitMultipart(::grpc::ServerContext* context, const ::file::InitReq* request, ::file::InitResp* response);
+    virtual ::grpc::Status UploadPart(::grpc::ServerContext* context, ::grpc::ServerReader< ::file::UploadPartReq>* reader, ::file::UploadPartResp* response);
+    virtual ::grpc::Status CompleteMultipart(::grpc::ServerContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response);
+    virtual ::grpc::Status AbortMultipart(::grpc::ServerContext* context, const ::file::AbortReq* request, ::file::AbortResp* response);
+    virtual ::grpc::Status Status(::grpc::ServerContext* context, const ::file::StatusReq* request, ::file::StatusResp* response);
   };
   template <class BaseClass>
   class WithAsyncMethod_filedowm : public BaseClass {
@@ -289,7 +413,107 @@ class fileService final {
       ::grpc::Service::RequestAsyncUnary(4, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
-  typedef WithAsyncMethod_filedowm<WithAsyncMethod_LoadFile<WithAsyncMethod_Showfile<WithAsyncMethod_filequeryinfo<WithAsyncMethod_ResolveFileHash<Service > > > > > AsyncService;
+  template <class BaseClass>
+  class WithAsyncMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodAsync(5);
+    }
+    ~WithAsyncMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestInitMultipart(::grpc::ServerContext* context, ::file::InitReq* request, ::grpc::ServerAsyncResponseWriter< ::file::InitResp>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(5, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithAsyncMethod_UploadPart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_UploadPart() {
+      ::grpc::Service::MarkMethodAsync(6);
+    }
+    ~WithAsyncMethod_UploadPart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status UploadPart(::grpc::ServerContext* /*context*/, ::grpc::ServerReader< ::file::UploadPartReq>* /*reader*/, ::file::UploadPartResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestUploadPart(::grpc::ServerContext* context, ::grpc::ServerAsyncReader< ::file::UploadPartResp, ::file::UploadPartReq>* reader, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncClientStreaming(6, context, reader, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithAsyncMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodAsync(7);
+    }
+    ~WithAsyncMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestCompleteMultipart(::grpc::ServerContext* context, ::file::CompleteReq* request, ::grpc::ServerAsyncResponseWriter< ::file::CompleteResp>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(7, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithAsyncMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodAsync(8);
+    }
+    ~WithAsyncMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestAbortMultipart(::grpc::ServerContext* context, ::file::AbortReq* request, ::grpc::ServerAsyncResponseWriter< ::file::AbortResp>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(8, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithAsyncMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithAsyncMethod_Status() {
+      ::grpc::Service::MarkMethodAsync(9);
+    }
+    ~WithAsyncMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestStatus(::grpc::ServerContext* context, ::file::StatusReq* request, ::grpc::ServerAsyncResponseWriter< ::file::StatusResp>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(9, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  typedef WithAsyncMethod_filedowm<WithAsyncMethod_LoadFile<WithAsyncMethod_Showfile<WithAsyncMethod_filequeryinfo<WithAsyncMethod_ResolveFileHash<WithAsyncMethod_InitMultipart<WithAsyncMethod_UploadPart<WithAsyncMethod_CompleteMultipart<WithAsyncMethod_AbortMultipart<WithAsyncMethod_Status<Service > > > > > > > > > > AsyncService;
   template <class BaseClass>
   class WithCallbackMethod_filedowm : public BaseClass {
    private:
@@ -425,7 +649,137 @@ class fileService final {
     virtual ::grpc::ServerUnaryReactor* ResolveFileHash(
       ::grpc::CallbackServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/)  { return nullptr; }
   };
-  typedef WithCallbackMethod_filedowm<WithCallbackMethod_LoadFile<WithCallbackMethod_Showfile<WithCallbackMethod_filequeryinfo<WithCallbackMethod_ResolveFileHash<Service > > > > > CallbackService;
+  template <class BaseClass>
+  class WithCallbackMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodCallback(5,
+          new ::grpc::internal::CallbackUnaryHandler< ::file::InitReq, ::file::InitResp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::file::InitReq* request, ::file::InitResp* response) { return this->InitMultipart(context, request, response); }));}
+    void SetMessageAllocatorFor_InitMultipart(
+        ::grpc::MessageAllocator< ::file::InitReq, ::file::InitResp>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(5);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::file::InitReq, ::file::InitResp>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* InitMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithCallbackMethod_UploadPart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_UploadPart() {
+      ::grpc::Service::MarkMethodCallback(6,
+          new ::grpc::internal::CallbackClientStreamingHandler< ::file::UploadPartReq, ::file::UploadPartResp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, ::file::UploadPartResp* response) { return this->UploadPart(context, response); }));
+    }
+    ~WithCallbackMethod_UploadPart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status UploadPart(::grpc::ServerContext* /*context*/, ::grpc::ServerReader< ::file::UploadPartReq>* /*reader*/, ::file::UploadPartResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerReadReactor< ::file::UploadPartReq>* UploadPart(
+      ::grpc::CallbackServerContext* /*context*/, ::file::UploadPartResp* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithCallbackMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodCallback(7,
+          new ::grpc::internal::CallbackUnaryHandler< ::file::CompleteReq, ::file::CompleteResp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::file::CompleteReq* request, ::file::CompleteResp* response) { return this->CompleteMultipart(context, request, response); }));}
+    void SetMessageAllocatorFor_CompleteMultipart(
+        ::grpc::MessageAllocator< ::file::CompleteReq, ::file::CompleteResp>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(7);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::file::CompleteReq, ::file::CompleteResp>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* CompleteMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithCallbackMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodCallback(8,
+          new ::grpc::internal::CallbackUnaryHandler< ::file::AbortReq, ::file::AbortResp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::file::AbortReq* request, ::file::AbortResp* response) { return this->AbortMultipart(context, request, response); }));}
+    void SetMessageAllocatorFor_AbortMultipart(
+        ::grpc::MessageAllocator< ::file::AbortReq, ::file::AbortResp>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(8);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::file::AbortReq, ::file::AbortResp>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* AbortMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithCallbackMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithCallbackMethod_Status() {
+      ::grpc::Service::MarkMethodCallback(9,
+          new ::grpc::internal::CallbackUnaryHandler< ::file::StatusReq, ::file::StatusResp>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::file::StatusReq* request, ::file::StatusResp* response) { return this->Status(context, request, response); }));}
+    void SetMessageAllocatorFor_Status(
+        ::grpc::MessageAllocator< ::file::StatusReq, ::file::StatusResp>* allocator) {
+      ::grpc::internal::MethodHandler* const handler = ::grpc::Service::GetHandler(9);
+      static_cast<::grpc::internal::CallbackUnaryHandler< ::file::StatusReq, ::file::StatusResp>*>(handler)
+              ->SetMessageAllocator(allocator);
+    }
+    ~WithCallbackMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* Status(
+      ::grpc::CallbackServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/)  { return nullptr; }
+  };
+  typedef WithCallbackMethod_filedowm<WithCallbackMethod_LoadFile<WithCallbackMethod_Showfile<WithCallbackMethod_filequeryinfo<WithCallbackMethod_ResolveFileHash<WithCallbackMethod_InitMultipart<WithCallbackMethod_UploadPart<WithCallbackMethod_CompleteMultipart<WithCallbackMethod_AbortMultipart<WithCallbackMethod_Status<Service > > > > > > > > > > CallbackService;
   typedef CallbackService ExperimentalCallbackService;
   template <class BaseClass>
   class WithGenericMethod_filedowm : public BaseClass {
@@ -508,6 +862,91 @@ class fileService final {
     }
     // disable synchronous version of this method
     ::grpc::Status ResolveFileHash(::grpc::ServerContext* /*context*/, const ::file::ReqResolveFileHash* /*request*/, ::file::RespResolveFileHash* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodGeneric(5);
+    }
+    ~WithGenericMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_UploadPart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_UploadPart() {
+      ::grpc::Service::MarkMethodGeneric(6);
+    }
+    ~WithGenericMethod_UploadPart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status UploadPart(::grpc::ServerContext* /*context*/, ::grpc::ServerReader< ::file::UploadPartReq>* /*reader*/, ::file::UploadPartResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodGeneric(7);
+    }
+    ~WithGenericMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodGeneric(8);
+    }
+    ~WithGenericMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+  };
+  template <class BaseClass>
+  class WithGenericMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithGenericMethod_Status() {
+      ::grpc::Service::MarkMethodGeneric(9);
+    }
+    ~WithGenericMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
       abort();
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
@@ -610,6 +1049,106 @@ class fileService final {
     }
     void RequestResolveFileHash(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
       ::grpc::Service::RequestAsyncUnary(4, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodRaw(5);
+    }
+    ~WithRawMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestInitMultipart(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(5, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_UploadPart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_UploadPart() {
+      ::grpc::Service::MarkMethodRaw(6);
+    }
+    ~WithRawMethod_UploadPart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status UploadPart(::grpc::ServerContext* /*context*/, ::grpc::ServerReader< ::file::UploadPartReq>* /*reader*/, ::file::UploadPartResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestUploadPart(::grpc::ServerContext* context, ::grpc::ServerAsyncReader< ::grpc::ByteBuffer, ::grpc::ByteBuffer>* reader, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncClientStreaming(6, context, reader, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodRaw(7);
+    }
+    ~WithRawMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestCompleteMultipart(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(7, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodRaw(8);
+    }
+    ~WithRawMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestAbortMultipart(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(8, context, request, response, new_call_cq, notification_cq, tag);
+    }
+  };
+  template <class BaseClass>
+  class WithRawMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawMethod_Status() {
+      ::grpc::Service::MarkMethodRaw(9);
+    }
+    ~WithRawMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    void RequestStatus(::grpc::ServerContext* context, ::grpc::ByteBuffer* request, ::grpc::ServerAsyncResponseWriter< ::grpc::ByteBuffer>* response, ::grpc::CompletionQueue* new_call_cq, ::grpc::ServerCompletionQueue* notification_cq, void *tag) {
+      ::grpc::Service::RequestAsyncUnary(9, context, request, response, new_call_cq, notification_cq, tag);
     }
   };
   template <class BaseClass>
@@ -720,6 +1259,116 @@ class fileService final {
       return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
     }
     virtual ::grpc::ServerUnaryReactor* ResolveFileHash(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodRawCallback(5,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->InitMultipart(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* InitMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_UploadPart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_UploadPart() {
+      ::grpc::Service::MarkMethodRawCallback(6,
+          new ::grpc::internal::CallbackClientStreamingHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, ::grpc::ByteBuffer* response) { return this->UploadPart(context, response); }));
+    }
+    ~WithRawCallbackMethod_UploadPart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status UploadPart(::grpc::ServerContext* /*context*/, ::grpc::ServerReader< ::file::UploadPartReq>* /*reader*/, ::file::UploadPartResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerReadReactor< ::grpc::ByteBuffer>* UploadPart(
+      ::grpc::CallbackServerContext* /*context*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodRawCallback(7,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->CompleteMultipart(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* CompleteMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodRawCallback(8,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->AbortMultipart(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* AbortMultipart(
+      ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
+  };
+  template <class BaseClass>
+  class WithRawCallbackMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithRawCallbackMethod_Status() {
+      ::grpc::Service::MarkMethodRawCallback(9,
+          new ::grpc::internal::CallbackUnaryHandler< ::grpc::ByteBuffer, ::grpc::ByteBuffer>(
+            [this](
+                   ::grpc::CallbackServerContext* context, const ::grpc::ByteBuffer* request, ::grpc::ByteBuffer* response) { return this->Status(context, request, response); }));
+    }
+    ~WithRawCallbackMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable synchronous version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    virtual ::grpc::ServerUnaryReactor* Status(
       ::grpc::CallbackServerContext* /*context*/, const ::grpc::ByteBuffer* /*request*/, ::grpc::ByteBuffer* /*response*/)  { return nullptr; }
   };
   template <class BaseClass>
@@ -857,9 +1506,117 @@ class fileService final {
     // replace default version of method with streamed unary
     virtual ::grpc::Status StreamedResolveFileHash(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::ReqResolveFileHash,::file::RespResolveFileHash>* server_unary_streamer) = 0;
   };
-  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<Service > > > > > StreamedUnaryService;
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_InitMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_InitMultipart() {
+      ::grpc::Service::MarkMethodStreamed(5,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::file::InitReq, ::file::InitResp>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::file::InitReq, ::file::InitResp>* streamer) {
+                       return this->StreamedInitMultipart(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_InitMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status InitMultipart(::grpc::ServerContext* /*context*/, const ::file::InitReq* /*request*/, ::file::InitResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedInitMultipart(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::InitReq,::file::InitResp>* server_unary_streamer) = 0;
+  };
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_CompleteMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_CompleteMultipart() {
+      ::grpc::Service::MarkMethodStreamed(7,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::file::CompleteReq, ::file::CompleteResp>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::file::CompleteReq, ::file::CompleteResp>* streamer) {
+                       return this->StreamedCompleteMultipart(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_CompleteMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status CompleteMultipart(::grpc::ServerContext* /*context*/, const ::file::CompleteReq* /*request*/, ::file::CompleteResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedCompleteMultipart(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::CompleteReq,::file::CompleteResp>* server_unary_streamer) = 0;
+  };
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_AbortMultipart : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_AbortMultipart() {
+      ::grpc::Service::MarkMethodStreamed(8,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::file::AbortReq, ::file::AbortResp>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::file::AbortReq, ::file::AbortResp>* streamer) {
+                       return this->StreamedAbortMultipart(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_AbortMultipart() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status AbortMultipart(::grpc::ServerContext* /*context*/, const ::file::AbortReq* /*request*/, ::file::AbortResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedAbortMultipart(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::AbortReq,::file::AbortResp>* server_unary_streamer) = 0;
+  };
+  template <class BaseClass>
+  class WithStreamedUnaryMethod_Status : public BaseClass {
+   private:
+    void BaseClassMustBeDerivedFromService(const Service* /*service*/) {}
+   public:
+    WithStreamedUnaryMethod_Status() {
+      ::grpc::Service::MarkMethodStreamed(9,
+        new ::grpc::internal::StreamedUnaryHandler<
+          ::file::StatusReq, ::file::StatusResp>(
+            [this](::grpc::ServerContext* context,
+                   ::grpc::ServerUnaryStreamer<
+                     ::file::StatusReq, ::file::StatusResp>* streamer) {
+                       return this->StreamedStatus(context,
+                         streamer);
+                  }));
+    }
+    ~WithStreamedUnaryMethod_Status() override {
+      BaseClassMustBeDerivedFromService(this);
+    }
+    // disable regular version of this method
+    ::grpc::Status Status(::grpc::ServerContext* /*context*/, const ::file::StatusReq* /*request*/, ::file::StatusResp* /*response*/) override {
+      abort();
+      return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+    }
+    // replace default version of method with streamed unary
+    virtual ::grpc::Status StreamedStatus(::grpc::ServerContext* context, ::grpc::ServerUnaryStreamer< ::file::StatusReq,::file::StatusResp>* server_unary_streamer) = 0;
+  };
+  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<WithStreamedUnaryMethod_InitMultipart<WithStreamedUnaryMethod_CompleteMultipart<WithStreamedUnaryMethod_AbortMultipart<WithStreamedUnaryMethod_Status<Service > > > > > > > > > StreamedUnaryService;
   typedef Service SplitStreamedService;
-  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<Service > > > > > StreamedService;
+  typedef WithStreamedUnaryMethod_filedowm<WithStreamedUnaryMethod_LoadFile<WithStreamedUnaryMethod_Showfile<WithStreamedUnaryMethod_filequeryinfo<WithStreamedUnaryMethod_ResolveFileHash<WithStreamedUnaryMethod_InitMultipart<WithStreamedUnaryMethod_CompleteMultipart<WithStreamedUnaryMethod_AbortMultipart<WithStreamedUnaryMethod_Status<Service > > > > > > > > > StreamedService;
 };
 
 }  // namespace file

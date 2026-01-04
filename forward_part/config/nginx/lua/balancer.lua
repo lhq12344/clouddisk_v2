@@ -20,7 +20,7 @@ function _M.pick(service_name)
 
     -- 选一个下标：这里用 request_id 做 hash，保证是整数
     local idx
-    local rid = ng x.var.request_id or ngx.var.http_x_request_id
+    local rid = ngx.var.request_id 
 
     if rid and #servers > 1 then
         -- ngx.crc32_short 返回整数，对字符串安全
@@ -31,7 +31,7 @@ function _M.pick(service_name)
     end
 
     local target = servers[idx]
-    local host, port = target:match("(.+):(%d+)")--注意没有做ipv6的兼容
+    local host, port = target:match("(.+):(%d+)")  --注意没有做ipv6的兼容
     port = tonumber(port)
 
     ngx.log(ngx.INFO, "proxy to ", service_name, " => ", host, ":", port)
