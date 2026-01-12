@@ -32,6 +32,8 @@ public:
 	ADD_METHOD_TO(AccountController::sendcode, "/user/sendcode", Post);
 	ADD_METHOD_TO(AccountController::verifycode, "/user/code", Post);
 	ADD_METHOD_TO(AccountController::userinfo, "/user/info", Get, "jwt_decode");
+	ADD_METHOD_TO(AccountController::addToBlacklist, "/user/token/blacklist", Post, "jwt_decode");
+	ADD_METHOD_TO(AccountController::addToWhitelist, "/user/token/whitelist", Post, "jwt_decode");
 
 	METHOD_LIST_END
 	// your declaration of processing function maybe like this:
@@ -45,4 +47,8 @@ public:
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void verifycode(const HttpRequestPtr &req,
 					std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void addToBlacklist(const HttpRequestPtr &req,
+						std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void addToWhitelist(const HttpRequestPtr &req,
+						std::function<void(const HttpResponsePtr &)> &&callback) const;
 };
