@@ -1,5 +1,10 @@
 #include "AccountController.h"
 #include "../../../other_srv/email_srv/KafkaProducer.h"
+#include <atomic>
+#include <chrono>
+#include <vector>
+#include <jwt-cpp/jwt.h>
+#include <jwt-cpp/traits/nlohmann-json/traits.h>
 
 drogon::HttpResponsePtr transError(const std::string &status, const std::string &msg, HttpStatusCode code)
 {
@@ -11,6 +16,144 @@ drogon::HttpResponsePtr transError(const std::string &status, const std::string 
 	resp->setStatusCode(code);
 	return resp;
 }
+
+namespace
+{
+const std::string kJwtBlacklistKey = "jwt:blacklist";
+const std::string kJwtWhitelistPrefix = "jwt:whitelist:user:";
+
+long long currentUnixSeconds()
+{
+	auto now = std::chrono::system_clock::now();
+	auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+	return seconds.count();
+}
+
+std::string whitelistKeyForUser(int userId)
+{
+	return kJwtWhitelistPrefix + std::to_string(userId);
+}
+
+bool decodeTokenPayload(const std::string &token, const std::string &signingKey, int &userId, std::string &userName, std::string &error)
+{
+	try
+	{
+		auto decoded = jwt::decode(token);
+		jwt::verify()
+			.allow_algorithm(jwt::algorithm::hs256{signingKey})
+			.with_issuer("Signin")
+			.verify(decoded);
+		userId = decoded.get_payload_claim("ID").as_integer();
+		userName = decoded.get_payload_claim("Name").as_string();
+		return true;
+	}
+	catch (const std::exception &e)
+	{
+		error = e.what();
+		return false;
+	}
+}
+
+void addTokenToWhitelist(const drogon::nosql::RedisClientPtr &redisClient,
+						 int userId,
+						 const std::string &token,
+						 std::function<void()> onSuccess,
+						 std::function<void(const std::string &)> onError)
+{
+	auto whitelistKey = whitelistKeyForUser(userId);
+	auto score = currentUnixSeconds();
+	redisClient->execCommandAsync(
+		[redisClient, whitelistKey, onSuccess, onError](const drogon::nosql::RedisResult &r)
+		{
+			if (r.type() != nosql::RedisResultType::kInteger)
+			{
+				onError("redis_zadd_failed");
+				return;
+			}
+			redisClient->execCommandAsync(
+				[redisClient, whitelistKey, onSuccess, onError](const drogon::nosql::RedisResult &r2)
+				{
+					if (r2.type() != nosql::RedisResultType::kInteger)
+					{
+						onError("redis_zcard_failed");
+						return;
+					}
+					auto count = r2.asInteger();
+					if (count <= 2)
+					{
+						onSuccess();
+						return;
+					}
+					auto extra = count - 2;
+					redisClient->execCommandAsync(
+						[redisClient, whitelistKey, onSuccess, onError](const drogon::nosql::RedisResult &r3)
+						{
+							if (r3.type() != nosql::RedisResultType::kArray)
+							{
+								onError("redis_zpopmin_failed");
+								return;
+							}
+							const auto &items = r3.asArray();
+							if (items.empty())
+							{
+								onSuccess();
+								return;
+							}
+							std::vector<std::string> tokens;
+							for (size_t i = 0; i + 1 < items.size(); i += 2)
+							{
+								tokens.push_back(items[i].asString());
+							}
+							if (tokens.empty())
+							{
+								onSuccess();
+								return;
+							}
+							auto pending = std::make_shared<std::atomic<size_t>>(tokens.size());
+							auto failed = std::make_shared<std::atomic<bool>>(false);
+							for (const auto &removedToken : tokens)
+							{
+								redisClient->execCommandAsync(
+									[pending, failed, onSuccess, onError](const drogon::nosql::RedisResult &r4)
+									{
+										if (r4.type() != nosql::RedisResultType::kInteger &&
+											r4.type() != nosql::RedisResultType::kSimpleString)
+										{
+											if (!failed->exchange(true))
+											{
+												onError("redis_sadd_failed");
+												return;
+											}
+										}
+										if (pending->fetch_sub(1) == 1 && !failed->load())
+										{
+											onSuccess();
+										}
+									},
+									[pending, failed, onError](const std::exception &err)
+									{
+										if (!failed->exchange(true))
+										{
+											onError(err.what());
+										}
+										pending->fetch_sub(1);
+									},
+									"SADD %s %s", kJwtBlacklistKey.c_str(), removedToken.c_str());
+							}
+						},
+						[onError](const std::exception &err)
+						{ onError(err.what()); },
+						"ZPOPMIN %s %lld", whitelistKey.c_str(), extra);
+				},
+				[onError](const std::exception &err)
+				{ onError(err.what()); },
+				"ZCARD %s", whitelistKey.c_str());
+		},
+		[onError](const std::exception &err)
+		{ onError(err.what()); },
+		"ZADD %s %lld %s", whitelistKey.c_str(), score, token.c_str());
+}
+} // namespace
 
 static bool isChannelReady(std::shared_ptr<grpc::Channel> channel)
 {
@@ -132,8 +275,37 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 								  Json::Value ret;
 								  ret["status"] = "ok";
 								  ret["token"] = response->message();
-								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-								  callback(resp);
+								  auto token = response->message();
+								  auto redisClient = app().getRedisClient();
+								  if (!redisClient)
+								  {
+									  auto resp = transError("error", "Redis client unavailable", k500InternalServerError);
+									  callback(resp);
+									  return;
+								  }
+								  int userId = 0;
+								  std::string userName;
+								  std::string decodeError;
+								  if (!decodeTokenPayload(token, MyAppData::instance().SigningKey, userId, userName, decodeError))
+								  {
+									  auto resp = transError("error", decodeError, k401Unauthorized);
+									  callback(resp);
+									  return;
+								  }
+								  addTokenToWhitelist(
+									  redisClient,
+									  userId,
+									  token,
+									  [callback, ret]()
+									  {
+										  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+										  callback(resp);
+									  },
+									  [callback](const std::string &err)
+									  {
+										  auto resp = transError("error", err, k500InternalServerError);
+										  callback(resp);
+									  });
 								  LOG_INFO("[signin] user:{}   user registering", request->username());
 							  }
 							  else
@@ -311,4 +483,118 @@ void AccountController::verifycode(const HttpRequestPtr &req,
 			return;
 		},
 		"get %s", email.c_str());
+}
+
+void AccountController::addToBlacklist(const HttpRequestPtr &req,
+									   std::function<void(const HttpResponsePtr &)> &&callback) const
+{
+	auto jsonPtr = req->getJsonObject();
+	if (!jsonPtr || !jsonPtr->isMember("token"))
+	{
+		auto resp = transError("error", "Missing token field", k400BadRequest);
+		callback(resp);
+		return;
+	}
+	auto token = (*jsonPtr)["token"].asString();
+	if (token.empty())
+	{
+		auto resp = transError("error", "Token is empty", k400BadRequest);
+		callback(resp);
+		return;
+	}
+	auto redisClient = app().getRedisClient();
+	if (!redisClient)
+	{
+		auto resp = transError("error", "Redis client unavailable", k500InternalServerError);
+		callback(resp);
+		return;
+	}
+	int userId = 0;
+	std::string userName;
+	std::string decodeError;
+	if (!decodeTokenPayload(token, MyAppData::instance().SigningKey, userId, userName, decodeError))
+	{
+		auto resp = transError("error", decodeError, k401Unauthorized);
+		callback(resp);
+		return;
+	}
+	auto whitelistKey = whitelistKeyForUser(userId);
+	redisClient->execCommandAsync(
+		[callback, token, whitelistKey, redisClient](const drogon::nosql::RedisResult &r)
+		{
+			if (r.type() != nosql::RedisResultType::kInteger &&
+				r.type() != nosql::RedisResultType::kSimpleString)
+			{
+				auto resp = transError("error", "redis_sadd_failed", k500InternalServerError);
+				callback(resp);
+				return;
+			}
+			redisClient->execCommandAsync(
+				[callback](const drogon::nosql::RedisResult &)
+				{
+					auto resp = transError("ok", "token blacklisted", k200OK);
+					callback(resp);
+				},
+				[callback](const std::exception &err)
+				{
+					auto resp = transError("error", err.what(), k500InternalServerError);
+					callback(resp);
+				},
+				"ZREM %s %s", whitelistKey.c_str(), token.c_str());
+		},
+		[callback](const std::exception &err)
+		{
+			auto resp = transError("error", err.what(), k500InternalServerError);
+			callback(resp);
+		},
+		"SADD %s %s", kJwtBlacklistKey.c_str(), token.c_str());
+}
+
+void AccountController::addToWhitelist(const HttpRequestPtr &req,
+									   std::function<void(const HttpResponsePtr &)> &&callback) const
+{
+	auto jsonPtr = req->getJsonObject();
+	if (!jsonPtr || !jsonPtr->isMember("token"))
+	{
+		auto resp = transError("error", "Missing token field", k400BadRequest);
+		callback(resp);
+		return;
+	}
+	auto token = (*jsonPtr)["token"].asString();
+	if (token.empty())
+	{
+		auto resp = transError("error", "Token is empty", k400BadRequest);
+		callback(resp);
+		return;
+	}
+	auto redisClient = app().getRedisClient();
+	if (!redisClient)
+	{
+		auto resp = transError("error", "Redis client unavailable", k500InternalServerError);
+		callback(resp);
+		return;
+	}
+	int userId = 0;
+	std::string userName;
+	std::string decodeError;
+	if (!decodeTokenPayload(token, MyAppData::instance().SigningKey, userId, userName, decodeError))
+	{
+		auto resp = transError("error", decodeError, k401Unauthorized);
+		callback(resp);
+		return;
+	}
+	addTokenToWhitelist(
+		redisClient,
+		userId,
+		token,
+		[callback]()
+		{
+			auto resp = transError("ok", "token whitelisted", k200OK);
+			callback(resp);
+		},
+		[callback](const std::string &err)
+		{
+			auto resp = transError("error", err, k500InternalServerError);
+			callback(resp);
+		});
 }
