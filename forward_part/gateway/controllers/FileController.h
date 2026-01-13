@@ -17,7 +17,7 @@ class FileController : public drogon::HttpController<FileController>
 {
 private:
 	const int CAPACITY;
-	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
+	mutable Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
 	std::shared_ptr<file::fileService::Stub> FindService(const std::string &key) const;
 
 public:

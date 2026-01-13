@@ -17,8 +17,8 @@ class AIController : public drogon::HttpController<AIController>
 {
 private:
 	const int CAPACITY;
-	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<AI::AIService>>> cache_;
-	std::shared_ptr<AI::AIService::Stub> AIController::FindService(const std::string &key) const;
+	mutable Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<AI::AIService>>> cache_;
+	std::shared_ptr<AI::AIService::Stub> FindService(const std::string &key) const;
 
 public:
 	AIController()

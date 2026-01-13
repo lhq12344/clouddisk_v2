@@ -17,8 +17,8 @@ class AccountController : public drogon::HttpController<AccountController>
 {
 private:
 	const int CAPACITY;
-	Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<account::accountService>>> cache_;
-	std::shared_ptr<account::accountService::Stub> AccountController::FindService(const std::string &key) const;
+	mutable Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<account::accountService>>> cache_;
+	std::shared_ptr<account::accountService::Stub> FindService(const std::string &key) const;
 
 public:
 	AccountController()
