@@ -116,7 +116,8 @@ namespace
 									redisClient->execCommandAsync(
 										[pending, failed, onSuccess, onError](const drogon::nosql::RedisResult &r4)
 										{
-											if (r4.type() != nosql::RedisResultType::kInteger)
+											if (r4.type() != nosql::RedisResultType::kInteger &&
+												r4.type() != nosql::RedisResultType::kSimpleString)
 											{
 												if (!failed->exchange(true))
 												{
@@ -521,7 +522,12 @@ void AccountController::addToBlacklist(const HttpRequestPtr &req,
 	redisClient->execCommandAsync(
 		[callback, token, whitelistKey, redisClient](const drogon::nosql::RedisResult &r)
 		{
+<<<<<<< HEAD
 			if (r.type() != nosql::RedisResultType::kInteger)
+=======
+			if (r.type() != nosql::RedisResultType::kInteger &&
+				r.type() != nosql::RedisResultType::kSimpleString)
+>>>>>>> 050a112ee3cb88d07e16c02a82a70c765d75f99e
 			{
 				auto resp = transError("error", "redis_sadd_failed", k500InternalServerError);
 				callback(resp);
