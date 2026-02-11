@@ -1,0 +1,5 @@
+{
+  "name": "NovaStorage OSS",
+  "description": "A high-performance, professional object storage management interface featuring secure account management and robust multipart file uploads.",
+  "requestFramePermissions": []
+}

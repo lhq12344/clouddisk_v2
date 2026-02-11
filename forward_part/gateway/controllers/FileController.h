@@ -30,6 +30,7 @@ public:
 	ADD_METHOD_TO(FileController::filedowm, "/file/download", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Showfile, "/file/showfile", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::DeleteFile, "/file/delete", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Initupload, "/file/initupload", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Uploadpart, "/file/uploadpart", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::CompleteMultipart, "/file/CompleteMultipart", Post, "jwt_decode");
@@ -55,4 +56,6 @@ public:
 						std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void Status(const HttpRequestPtr &req,
 				std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void DeleteFile(const HttpRequestPtr &req,
+					std::function<void(const HttpResponsePtr &)> &&callback) const;
 };

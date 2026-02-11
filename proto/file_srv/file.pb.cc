@@ -311,6 +311,36 @@ struct ReqFileDownDefaultTypeInternal {
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ReqFileDownDefaultTypeInternal _ReqFileDown_default_instance_;
 
+inline constexpr ReqDeleteFile::Impl_::Impl_(
+    ::_pbi::ConstantInitialized) noexcept
+      : username_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        userid_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        filename_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        filehash_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        _cached_size_{0} {}
+
+template <typename>
+PROTOBUF_CONSTEXPR ReqDeleteFile::ReqDeleteFile(::_pbi::ConstantInitialized)
+    : _impl_(::_pbi::ConstantInitialized()) {}
+struct ReqDeleteFileDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR ReqDeleteFileDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~ReqDeleteFileDefaultTypeInternal() {}
+  union {
+    ReqDeleteFile _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ReqDeleteFileDefaultTypeInternal _ReqDeleteFile_default_instance_;
+
 inline constexpr InitResp::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
       : upload_id_(
@@ -756,6 +786,18 @@ const ::uint32_t
         ~0u,  // no sizeof(Split)
         PROTOBUF_FIELD_OFFSET(::file::StatusResp, _impl_.total_parts_),
         PROTOBUF_FIELD_OFFSET(::file::StatusResp, _impl_.uploaded_parts_),
+        ~0u,  // no _has_bits_
+        PROTOBUF_FIELD_OFFSET(::file::ReqDeleteFile, _internal_metadata_),
+        ~0u,  // no _extensions_
+        ~0u,  // no _oneof_case_
+        ~0u,  // no _weak_field_map_
+        ~0u,  // no _inlined_string_donated_
+        ~0u,  // no _split_
+        ~0u,  // no sizeof(Split)
+        PROTOBUF_FIELD_OFFSET(::file::ReqDeleteFile, _impl_.username_),
+        PROTOBUF_FIELD_OFFSET(::file::ReqDeleteFile, _impl_.userid_),
+        PROTOBUF_FIELD_OFFSET(::file::ReqDeleteFile, _impl_.filename_),
+        PROTOBUF_FIELD_OFFSET(::file::ReqDeleteFile, _impl_.filehash_),
 };
 
 static const ::_pbi::MigrationSchema
@@ -780,6 +822,7 @@ static const ::_pbi::MigrationSchema
         {196, -1, -1, sizeof(::file::AbortResp)},
         {204, -1, -1, sizeof(::file::StatusReq)},
         {213, -1, -1, sizeof(::file::StatusResp)},
+        {223, -1, -1, sizeof(::file::ReqDeleteFile)},
 };
 static const ::_pb::Message* const file_default_instances[] = {
     &::file::_ReqFileDown_default_instance_._instance,
@@ -802,6 +845,7 @@ static const ::_pb::Message* const file_default_instances[] = {
     &::file::_AbortResp_default_instance_._instance,
     &::file::_StatusReq_default_instance_._instance,
     &::file::_StatusResp_default_instance_._instance,
+    &::file::_ReqDeleteFile_default_instance_._instance,
 };
 const char descriptor_table_protodef_file_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIABLE(
     protodesc_cold) = {
@@ -842,34 +886,37 @@ const char descriptor_table_protodef_file_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIA
     "(\t\"\035\n\010AbortReq\022\021\n\tupload_id\030\001 \001(\t\"\013\n\tAbo"
     "rtResp\"\036\n\tStatusReq\022\021\n\tupload_id\030\001 \001(\t\"9"
     "\n\nStatusResp\022\023\n\013total_parts\030\001 \001(\005\022\026\n\016upl"
-    "oaded_parts\030\002 \003(\0052\241\004\n\013fileService\022+\n\010fil"
-    "edowm\022\021.file.ReqFileDown\032\n.file.Resp\"\000\022+"
-    "\n\010LoadFile\022\021.file.Reqloadfile\032\n.file.Res"
-    "p\"\000\022+\n\010Showfile\022\021.file.Reqshowfile\032\n.fil"
-    "e.Resp\"\000\022:\n\rfilequeryinfo\022\022.file.ReqFile"
-    "Query\032\023.file.RespFileQuery\"\000\022H\n\017ResolveF"
-    "ileHash\022\030.file.ReqResolveFileHash\032\031.file"
-    ".RespResolveFileHash\"\000\022.\n\rInitMultipart\022"
-    "\r.file.InitReq\032\016.file.InitResp\0229\n\nUpload"
-    "Part\022\023.file.UploadPartReq\032\024.file.UploadP"
-    "artResp(\001\022:\n\021CompleteMultipart\022\021.file.Co"
-    "mpleteReq\032\022.file.CompleteResp\0221\n\016AbortMu"
-    "ltipart\022\016.file.AbortReq\032\017.file.AbortResp"
-    "\022+\n\006Status\022\017.file.StatusReq\032\020.file.Statu"
-    "sRespB\'Z%clouddisk_v2/file_srv/protobuf;"
-    "filepbb\006proto3"
+    "oaded_parts\030\002 \003(\005\"U\n\rReqDeleteFile\022\020\n\010us"
+    "ername\030\001 \001(\t\022\016\n\006userid\030\002 \001(\t\022\020\n\010filename"
+    "\030\003 \001(\t\022\020\n\010filehash\030\004 \001(\t2\320\004\n\013fileService"
+    "\022+\n\010filedowm\022\021.file.ReqFileDown\032\n.file.R"
+    "esp\"\000\022+\n\010LoadFile\022\021.file.Reqloadfile\032\n.f"
+    "ile.Resp\"\000\022+\n\010Showfile\022\021.file.Reqshowfil"
+    "e\032\n.file.Resp\"\000\022:\n\rfilequeryinfo\022\022.file."
+    "ReqFileQuery\032\023.file.RespFileQuery\"\000\022H\n\017R"
+    "esolveFileHash\022\030.file.ReqResolveFileHash"
+    "\032\031.file.RespResolveFileHash\"\000\022.\n\rInitMul"
+    "tipart\022\r.file.InitReq\032\016.file.InitResp\0229\n"
+    "\nUploadPart\022\023.file.UploadPartReq\032\024.file."
+    "UploadPartResp(\001\022:\n\021CompleteMultipart\022\021."
+    "file.CompleteReq\032\022.file.CompleteResp\0221\n\016"
+    "AbortMultipart\022\016.file.AbortReq\032\017.file.Ab"
+    "ortResp\022+\n\006Status\022\017.file.StatusReq\032\020.fil"
+    "e.StatusResp\022-\n\nDeleteFile\022\023.file.ReqDel"
+    "eteFile\032\n.file.RespB\'Z%clouddisk_v2/file"
+    "_srv/protobuf;filepbb\006proto3"
 };
 static ::absl::once_flag descriptor_table_file_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_file_2eproto = {
     false,
     false,
-    2094,
+    2228,
     descriptor_table_protodef_file_2eproto,
     "file.proto",
     &descriptor_table_file_2eproto_once,
     nullptr,
     0,
-    20,
+    21,
     schemas,
     file_default_instances,
     TableStruct_file_2eproto::offsets,
@@ -5954,6 +6001,286 @@ void StatusResp::InternalSwap(StatusResp* PROTOBUF_RESTRICT other) {
 }
 
 ::google::protobuf::Metadata StatusResp::GetMetadata() const {
+  return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
+}
+// ===================================================================
+
+class ReqDeleteFile::_Internal {
+ public:
+};
+
+ReqDeleteFile::ReqDeleteFile(::google::protobuf::Arena* arena)
+    : ::google::protobuf::Message(arena) {
+  SharedCtor(arena);
+  // @@protoc_insertion_point(arena_constructor:file.ReqDeleteFile)
+}
+inline PROTOBUF_NDEBUG_INLINE ReqDeleteFile::Impl_::Impl_(
+    ::google::protobuf::internal::InternalVisibility visibility, ::google::protobuf::Arena* arena,
+    const Impl_& from, const ::file::ReqDeleteFile& from_msg)
+      : username_(arena, from.username_),
+        userid_(arena, from.userid_),
+        filename_(arena, from.filename_),
+        filehash_(arena, from.filehash_),
+        _cached_size_{0} {}
+
+ReqDeleteFile::ReqDeleteFile(
+    ::google::protobuf::Arena* arena,
+    const ReqDeleteFile& from)
+    : ::google::protobuf::Message(arena) {
+  ReqDeleteFile* const _this = this;
+  (void)_this;
+  _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+  new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+
+  // @@protoc_insertion_point(copy_constructor:file.ReqDeleteFile)
+}
+inline PROTOBUF_NDEBUG_INLINE ReqDeleteFile::Impl_::Impl_(
+    ::google::protobuf::internal::InternalVisibility visibility,
+    ::google::protobuf::Arena* arena)
+      : username_(arena),
+        userid_(arena),
+        filename_(arena),
+        filehash_(arena),
+        _cached_size_{0} {}
+
+inline void ReqDeleteFile::SharedCtor(::_pb::Arena* arena) {
+  new (&_impl_) Impl_(internal_visibility(), arena);
+}
+ReqDeleteFile::~ReqDeleteFile() {
+  // @@protoc_insertion_point(destructor:file.ReqDeleteFile)
+  _internal_metadata_.Delete<::google::protobuf::UnknownFieldSet>();
+  SharedDtor();
+}
+inline void ReqDeleteFile::SharedDtor() {
+  ABSL_DCHECK(GetArena() == nullptr);
+  _impl_.username_.Destroy();
+  _impl_.userid_.Destroy();
+  _impl_.filename_.Destroy();
+  _impl_.filehash_.Destroy();
+  _impl_.~Impl_();
+}
+
+const ::google::protobuf::MessageLite::ClassData*
+ReqDeleteFile::GetClassData() const {
+  PROTOBUF_CONSTINIT static const ::google::protobuf::MessageLite::
+      ClassDataFull _data_ = {
+          {
+              &_table_.header,
+              nullptr,  // OnDemandRegisterArenaDtor
+              nullptr,  // IsInitialized
+              PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_._cached_size_),
+              false,
+          },
+          &ReqDeleteFile::MergeImpl,
+          &ReqDeleteFile::kDescriptorMethods,
+          &descriptor_table_file_2eproto,
+          nullptr,  // tracker
+      };
+  ::google::protobuf::internal::PrefetchToLocalCache(&_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(_data_.tc_table);
+  return _data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<2, 4, 0, 57, 2> ReqDeleteFile::_table_ = {
+  {
+    0,  // no _has_bits_
+    0, // no _extensions_
+    4, 24,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4294967280,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    4,  // num_field_entries
+    0,  // num_aux_entries
+    offsetof(decltype(_table_), field_names),  // no aux_entries
+    &_ReqDeleteFile_default_instance_._instance,
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::GenericFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::file::ReqDeleteFile>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    // string filehash = 4;
+    {::_pbi::TcParser::FastUS1,
+     {34, 63, 0, PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.filehash_)}},
+    // string username = 1;
+    {::_pbi::TcParser::FastUS1,
+     {10, 63, 0, PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.username_)}},
+    // string userid = 2;
+    {::_pbi::TcParser::FastUS1,
+     {18, 63, 0, PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.userid_)}},
+    // string filename = 3;
+    {::_pbi::TcParser::FastUS1,
+     {26, 63, 0, PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.filename_)}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // string username = 1;
+    {PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.username_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string userid = 2;
+    {PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.userid_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string filename = 3;
+    {PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.filename_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string filehash = 4;
+    {PROTOBUF_FIELD_OFFSET(ReqDeleteFile, _impl_.filehash_), 0, 0,
+    (0 | ::_fl::kFcSingular | ::_fl::kUtf8String | ::_fl::kRepAString)},
+  }},
+  // no aux_entries
+  {{
+    "\22\10\6\10\10\0\0\0"
+    "file.ReqDeleteFile"
+    "username"
+    "userid"
+    "filename"
+    "filehash"
+  }},
+};
+
+PROTOBUF_NOINLINE void ReqDeleteFile::Clear() {
+// @@protoc_insertion_point(message_clear_start:file.ReqDeleteFile)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.username_.ClearToEmpty();
+  _impl_.userid_.ClearToEmpty();
+  _impl_.filename_.ClearToEmpty();
+  _impl_.filehash_.ClearToEmpty();
+  _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
+}
+
+::uint8_t* ReqDeleteFile::_InternalSerialize(
+    ::uint8_t* target,
+    ::google::protobuf::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:file.ReqDeleteFile)
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  // string username = 1;
+  if (!this->_internal_username().empty()) {
+    const std::string& _s = this->_internal_username();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.ReqDeleteFile.username");
+    target = stream->WriteStringMaybeAliased(1, _s, target);
+  }
+
+  // string userid = 2;
+  if (!this->_internal_userid().empty()) {
+    const std::string& _s = this->_internal_userid();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.ReqDeleteFile.userid");
+    target = stream->WriteStringMaybeAliased(2, _s, target);
+  }
+
+  // string filename = 3;
+  if (!this->_internal_filename().empty()) {
+    const std::string& _s = this->_internal_filename();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.ReqDeleteFile.filename");
+    target = stream->WriteStringMaybeAliased(3, _s, target);
+  }
+
+  // string filehash = 4;
+  if (!this->_internal_filehash().empty()) {
+    const std::string& _s = this->_internal_filehash();
+    ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+        _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "file.ReqDeleteFile.filehash");
+    target = stream->WriteStringMaybeAliased(4, _s, target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target =
+        ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+            _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:file.ReqDeleteFile)
+  return target;
+}
+
+::size_t ReqDeleteFile::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:file.ReqDeleteFile)
+  ::size_t total_size = 0;
+
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  ::_pbi::Prefetch5LinesFrom7Lines(reinterpret_cast<const void*>(this));
+  // string username = 1;
+  if (!this->_internal_username().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_username());
+  }
+
+  // string userid = 2;
+  if (!this->_internal_userid().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_userid());
+  }
+
+  // string filename = 3;
+  if (!this->_internal_filename().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_filename());
+  }
+
+  // string filehash = 4;
+  if (!this->_internal_filehash().empty()) {
+    total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                    this->_internal_filehash());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+
+void ReqDeleteFile::MergeImpl(::google::protobuf::MessageLite& to_msg, const ::google::protobuf::MessageLite& from_msg) {
+  auto* const _this = static_cast<ReqDeleteFile*>(&to_msg);
+  auto& from = static_cast<const ReqDeleteFile&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:file.ReqDeleteFile)
+  ABSL_DCHECK_NE(&from, _this);
+  ::uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_username().empty()) {
+    _this->_internal_set_username(from._internal_username());
+  }
+  if (!from._internal_userid().empty()) {
+    _this->_internal_set_userid(from._internal_userid());
+  }
+  if (!from._internal_filename().empty()) {
+    _this->_internal_set_filename(from._internal_filename());
+  }
+  if (!from._internal_filehash().empty()) {
+    _this->_internal_set_filehash(from._internal_filehash());
+  }
+  _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void ReqDeleteFile::CopyFrom(const ReqDeleteFile& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:file.ReqDeleteFile)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+
+void ReqDeleteFile::InternalSwap(ReqDeleteFile* PROTOBUF_RESTRICT other) {
+  using std::swap;
+  auto* arena = GetArena();
+  ABSL_DCHECK_EQ(arena, other->GetArena());
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.username_, &other->_impl_.username_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.userid_, &other->_impl_.userid_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.filename_, &other->_impl_.filename_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.filehash_, &other->_impl_.filehash_, arena);
+}
+
+::google::protobuf::Metadata ReqDeleteFile::GetMetadata() const {
   return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
 }
 // @@protoc_insertion_point(namespace_scope)

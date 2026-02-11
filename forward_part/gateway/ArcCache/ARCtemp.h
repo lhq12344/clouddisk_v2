@@ -63,14 +63,24 @@ namespace ArcGrpcLB
 		for (size_t i = 0; i < n; ++i)
 		{
 			size_t idx = (base + i) % n;
-			auto &ep = entry->eps[idx];
 
-			if (!ep.channel)
+			// Upgrade to unique lock only when we need to initialize a channel.
+			if (!entry->eps[idx].channel)
 			{
-				ep.channel = grpc::CreateChannel(ep.addrStr(), grpc::InsecureChannelCredentials());
-				ep.stub = MakeSharedStub<Service>(ep.channel);
+				lk.unlock();
+				std::unique_lock ulk(entry->mu);
+				if (entry->eps.empty() || IsExpired(entry->expire_at) || idx >= entry->eps.size())
+					return nullptr;
+				if (!entry->eps[idx].channel)
+				{
+					entry->eps[idx].channel = grpc::CreateChannel(entry->eps[idx].addrStr(), grpc::InsecureChannelCredentials());
+					entry->eps[idx].stub = MakeSharedStub<Service>(entry->eps[idx].channel);
+				}
+				ulk.unlock();
+				lk.lock();
 			}
 
+			auto &ep = entry->eps[idx];
 			if (ep.channel && isReady(ep.channel))
 			{
 				LOG_INFO("[LB] key={}, pick {} (idx={}/{})", key, ep.addrStr(), idx, n);

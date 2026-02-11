@@ -76,9 +76,11 @@ private:
 static bool isChannelReady(std::shared_ptr<grpc::Channel> channel)
 {
 	grpc_connectivity_state state =
-		channel->GetState(/*try_to_connect=*/false);
+		channel->GetState(/*try_to_connect=*/true);
 
-	return state == GRPC_CHANNEL_READY;
+	return state == GRPC_CHANNEL_READY ||
+		   state == GRPC_CHANNEL_IDLE ||
+		   state == GRPC_CHANNEL_CONNECTING;
 }
 static std::string url_encode(const std::string &value)
 {
@@ -269,9 +271,12 @@ void FileController::filedowm(const HttpRequestPtr &req,
 
 								std::string downloadURL;
 								downloadURL = response->message(); // 这里已经是完整 signed URL
-								auto resp = drogon::HttpResponse::newHttpResponse();
-								resp->setStatusCode(drogon::k302Found);
-								resp->addHeader("Location", downloadURL);
+
+								Json::Value ret;
+								ret["download_url"] = downloadURL;
+								ret["filename"] = request->filename();
+								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+								resp->setStatusCode(drogon::k200OK);
 								callback(resp);
 								LOG_INFO("[filedowm] user:{} find {} download file oss signed url {}",
 										 request->username(), request->filename(), downloadURL);
@@ -412,9 +417,11 @@ void FileController::Showfile(const HttpRequestPtr &req,
 								// response->message() 是可直接打开的 inline signed url
 								previewURL = response->message();
 
-								auto resp = drogon::HttpResponse::newHttpResponse();
-								resp->setStatusCode(drogon::k303SeeOther);
-								resp->addHeader("Location", previewURL);
+								Json::Value ret;
+								ret["preview_url"] = previewURL;
+								ret["filename"] = request->filename();
+								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+								resp->setStatusCode(drogon::k200OK);
 								callback(resp);
 								LOG_INFO("[Showfile] user:{} find {} show file oss signed url url{}",
 										 request->username(), request->filename(), previewURL);
@@ -769,4 +776,71 @@ void FileController::Status(const HttpRequestPtr &req,
 							  resp->setStatusCode(drogon::k200OK);
 							  callback(resp);
 						  });
+}
+void FileController::DeleteFile(const HttpRequestPtr &req,
+								std::function<void(const HttpResponsePtr &)> &&callback) const
+{
+	auto stub = FindService("file_srv");
+	if (!stub)
+	{
+		Json::Value ret;
+		ret["error"] = "service_unavailable";
+		auto r = drogon::HttpResponse::newHttpJsonResponse(ret);
+		r->setStatusCode(drogon::k503ServiceUnavailable);
+		callback(r);
+		return;
+	}
+
+	std::string name;
+	int userId = 0;
+	drogon::HttpResponsePtr authResp;
+	if (!getArgumentsFromJWT(req, authResp, name, userId))
+	{
+		callback(authResp);
+		return;
+	}
+
+	auto jsonPtr = req->getJsonObject();
+	if (!jsonPtr || !(*jsonPtr).isMember("filename") || !(*jsonPtr).isMember("filehash"))
+	{
+		Json::Value ret;
+		ret["error"] = "invalid_json";
+		ret["details"] = "missing filename/filehash";
+		auto r = drogon::HttpResponse::newHttpJsonResponse(ret);
+		r->setStatusCode(drogon::k400BadRequest);
+		callback(r);
+		return;
+	}
+
+	auto context = std::make_shared<::grpc::ClientContext>();
+	auto request = std::make_shared<::file::ReqDeleteFile>();
+	auto response = std::make_shared<::file::Resp>();
+
+	request->set_username(name);
+	request->set_userid(std::to_string(userId));
+	request->set_filename((*jsonPtr)["filename"].asString());
+	request->set_filehash((*jsonPtr)["filehash"].asString());
+
+	stub->async()->DeleteFile(context.get(), request.get(), response.get(),
+							  [context, request, response, callback](::grpc::Status status)
+							  {
+								  if (status.ok() && response->code() == 0)
+								  {
+									  Json::Value ret;
+									  ret["status"] = response->code();
+									  ret["message"] = response->message();
+									  auto r = drogon::HttpResponse::newHttpJsonResponse(ret);
+									  r->setStatusCode(drogon::k200OK);
+									  callback(r);
+								  }
+								  else
+								  {
+									  Json::Value ret;
+									  ret["error"] = "grpc_error";
+									  ret["details"] = status.error_message();
+									  auto r = drogon::HttpResponse::newHttpJsonResponse(ret);
+									  r->setStatusCode(drogon::k500InternalServerError);
+									  callback(r);
+								  }
+							  });
 }

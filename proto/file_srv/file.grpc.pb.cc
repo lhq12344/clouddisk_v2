@@ -32,6 +32,7 @@ static const char* fileService_method_names[] = {
   "/file.fileService/CompleteMultipart",
   "/file.fileService/AbortMultipart",
   "/file.fileService/Status",
+  "/file.fileService/DeleteFile",
 };
 
 std::unique_ptr< fileService::Stub> fileService::NewStub(const std::shared_ptr< ::grpc::ChannelInterface>& channel, const ::grpc::StubOptions& options) {
@@ -51,6 +52,7 @@ fileService::Stub::Stub(const std::shared_ptr< ::grpc::ChannelInterface>& channe
   , rpcmethod_CompleteMultipart_(fileService_method_names[7], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_AbortMultipart_(fileService_method_names[8], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   , rpcmethod_Status_(fileService_method_names[9], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
+  , rpcmethod_DeleteFile_(fileService_method_names[10], options.suffix_for_stats(),::grpc::internal::RpcMethod::NORMAL_RPC, channel)
   {}
 
 ::grpc::Status fileService::Stub::filedowm(::grpc::ClientContext* context, const ::file::ReqFileDown& request, ::file::Resp* response) {
@@ -276,6 +278,29 @@ void fileService::Stub::async::Status(::grpc::ClientContext* context, const ::fi
   return result;
 }
 
+::grpc::Status fileService::Stub::DeleteFile(::grpc::ClientContext* context, const ::file::ReqDeleteFile& request, ::file::Resp* response) {
+  return ::grpc::internal::BlockingUnaryCall< ::file::ReqDeleteFile, ::file::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), rpcmethod_DeleteFile_, context, request, response);
+}
+
+void fileService::Stub::async::DeleteFile(::grpc::ClientContext* context, const ::file::ReqDeleteFile* request, ::file::Resp* response, std::function<void(::grpc::Status)> f) {
+  ::grpc::internal::CallbackUnaryCall< ::file::ReqDeleteFile, ::file::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_DeleteFile_, context, request, response, std::move(f));
+}
+
+void fileService::Stub::async::DeleteFile(::grpc::ClientContext* context, const ::file::ReqDeleteFile* request, ::file::Resp* response, ::grpc::ClientUnaryReactor* reactor) {
+  ::grpc::internal::ClientCallbackUnaryFactory::Create< ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(stub_->channel_.get(), stub_->rpcmethod_DeleteFile_, context, request, response, reactor);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::Resp>* fileService::Stub::PrepareAsyncDeleteFileRaw(::grpc::ClientContext* context, const ::file::ReqDeleteFile& request, ::grpc::CompletionQueue* cq) {
+  return ::grpc::internal::ClientAsyncResponseReaderHelper::Create< ::file::Resp, ::file::ReqDeleteFile, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(channel_.get(), cq, rpcmethod_DeleteFile_, context, request);
+}
+
+::grpc::ClientAsyncResponseReader< ::file::Resp>* fileService::Stub::AsyncDeleteFileRaw(::grpc::ClientContext* context, const ::file::ReqDeleteFile& request, ::grpc::CompletionQueue* cq) {
+  auto* result =
+    this->PrepareAsyncDeleteFileRaw(context, request, cq);
+  result->StartCall();
+  return result;
+}
+
 fileService::Service::Service() {
   AddMethod(new ::grpc::internal::RpcServiceMethod(
       fileService_method_names[0],
@@ -377,6 +402,16 @@ fileService::Service::Service() {
              ::file::StatusResp* resp) {
                return service->Status(ctx, req, resp);
              }, this)));
+  AddMethod(new ::grpc::internal::RpcServiceMethod(
+      fileService_method_names[10],
+      ::grpc::internal::RpcMethod::NORMAL_RPC,
+      new ::grpc::internal::RpcMethodHandler< fileService::Service, ::file::ReqDeleteFile, ::file::Resp, ::grpc::protobuf::MessageLite, ::grpc::protobuf::MessageLite>(
+          [](fileService::Service* service,
+             ::grpc::ServerContext* ctx,
+             const ::file::ReqDeleteFile* req,
+             ::file::Resp* resp) {
+               return service->DeleteFile(ctx, req, resp);
+             }, this)));
 }
 
 fileService::Service::~Service() {
@@ -446,6 +481,13 @@ fileService::Service::~Service() {
 }
 
 ::grpc::Status fileService::Service::Status(::grpc::ServerContext* context, const ::file::StatusReq* request, ::file::StatusResp* response) {
+  (void) context;
+  (void) request;
+  (void) response;
+  return ::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, "");
+}
+
+::grpc::Status fileService::Service::DeleteFile(::grpc::ServerContext* context, const ::file::ReqDeleteFile* request, ::file::Resp* response) {
   (void) context;
   (void) request;
   (void) response;

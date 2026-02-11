@@ -72,6 +72,9 @@ extern InitReqDefaultTypeInternal _InitReq_default_instance_;
 class InitResp;
 struct InitRespDefaultTypeInternal;
 extern InitRespDefaultTypeInternal _InitResp_default_instance_;
+class ReqDeleteFile;
+struct ReqDeleteFileDefaultTypeInternal;
+extern ReqDeleteFileDefaultTypeInternal _ReqDeleteFile_default_instance_;
 class ReqFileDown;
 struct ReqFileDownDefaultTypeInternal;
 extern ReqFileDownDefaultTypeInternal _ReqFileDown_default_instance_;
@@ -2468,6 +2471,237 @@ class ReqFileDown final : public ::google::protobuf::Message
     ::google::protobuf::internal::ArenaStringPtr filename_;
     ::google::protobuf::internal::ArenaStringPtr filehash_;
     ::int32_t file_size_;
+    mutable ::google::protobuf::internal::CachedSize _cached_size_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_file_2eproto;
+};
+// -------------------------------------------------------------------
+
+class ReqDeleteFile final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:file.ReqDeleteFile) */ {
+ public:
+  inline ReqDeleteFile() : ReqDeleteFile(nullptr) {}
+  ~ReqDeleteFile() override;
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR ReqDeleteFile(
+      ::google::protobuf::internal::ConstantInitialized);
+
+  inline ReqDeleteFile(const ReqDeleteFile& from) : ReqDeleteFile(nullptr, from) {}
+  inline ReqDeleteFile(ReqDeleteFile&& from) noexcept
+      : ReqDeleteFile(nullptr, std::move(from)) {}
+  inline ReqDeleteFile& operator=(const ReqDeleteFile& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline ReqDeleteFile& operator=(ReqDeleteFile&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetArena() == from.GetArena()
+#ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetArena() != nullptr
+#endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const ReqDeleteFile& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const ReqDeleteFile* internal_default_instance() {
+    return reinterpret_cast<const ReqDeleteFile*>(
+        &_ReqDeleteFile_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 20;
+  friend void swap(ReqDeleteFile& a, ReqDeleteFile& b) { a.Swap(&b); }
+  inline void Swap(ReqDeleteFile* other) {
+    if (other == this) return;
+#ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() != nullptr && GetArena() == other->GetArena()) {
+#else   // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetArena() == other->GetArena()) {
+#endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(ReqDeleteFile* other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  ReqDeleteFile* New(::google::protobuf::Arena* arena = nullptr) const final {
+    return ::google::protobuf::Message::DefaultConstruct<ReqDeleteFile>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const ReqDeleteFile& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const ReqDeleteFile& from) { ReqDeleteFile::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(
+      ::google::protobuf::MessageLite& to_msg,
+      const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() final;
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* _InternalSerialize(
+      ::uint8_t* target,
+      ::google::protobuf::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* arena);
+  void SharedDtor();
+  void InternalSwap(ReqDeleteFile* other);
+ private:
+  friend class ::google::protobuf::internal::AnyMetadata;
+  static ::absl::string_view FullMessageName() { return "file.ReqDeleteFile"; }
+
+ protected:
+  explicit ReqDeleteFile(::google::protobuf::Arena* arena);
+  ReqDeleteFile(::google::protobuf::Arena* arena, const ReqDeleteFile& from);
+  ReqDeleteFile(::google::protobuf::Arena* arena, ReqDeleteFile&& from) noexcept
+      : ReqDeleteFile(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::Message::ClassData* GetClassData() const final;
+
+ public:
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kUsernameFieldNumber = 1,
+    kUseridFieldNumber = 2,
+    kFilenameFieldNumber = 3,
+    kFilehashFieldNumber = 4,
+  };
+  // string username = 1;
+  void clear_username() ;
+  const std::string& username() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_username(Arg_&& arg, Args_... args);
+  std::string* mutable_username();
+  PROTOBUF_NODISCARD std::string* release_username();
+  void set_allocated_username(std::string* value);
+
+  private:
+  const std::string& _internal_username() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_username(
+      const std::string& value);
+  std::string* _internal_mutable_username();
+
+  public:
+  // string userid = 2;
+  void clear_userid() ;
+  const std::string& userid() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_userid(Arg_&& arg, Args_... args);
+  std::string* mutable_userid();
+  PROTOBUF_NODISCARD std::string* release_userid();
+  void set_allocated_userid(std::string* value);
+
+  private:
+  const std::string& _internal_userid() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_userid(
+      const std::string& value);
+  std::string* _internal_mutable_userid();
+
+  public:
+  // string filename = 3;
+  void clear_filename() ;
+  const std::string& filename() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_filename(Arg_&& arg, Args_... args);
+  std::string* mutable_filename();
+  PROTOBUF_NODISCARD std::string* release_filename();
+  void set_allocated_filename(std::string* value);
+
+  private:
+  const std::string& _internal_filename() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filename(
+      const std::string& value);
+  std::string* _internal_mutable_filename();
+
+  public:
+  // string filehash = 4;
+  void clear_filehash() ;
+  const std::string& filehash() const;
+  template <typename Arg_ = const std::string&, typename... Args_>
+  void set_filehash(Arg_&& arg, Args_... args);
+  std::string* mutable_filehash();
+  PROTOBUF_NODISCARD std::string* release_filehash();
+  void set_allocated_filehash(std::string* value);
+
+  private:
+  const std::string& _internal_filehash() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_filehash(
+      const std::string& value);
+  std::string* _internal_mutable_filehash();
+
+  public:
+  // @@protoc_insertion_point(class_scope:file.ReqDeleteFile)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<
+      2, 4, 0,
+      57, 2>
+      _table_;
+
+  static constexpr const void* _raw_default_instance_ =
+      &_ReqDeleteFile_default_instance_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(
+        ::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena);
+    inline explicit Impl_(::google::protobuf::internal::InternalVisibility visibility,
+                          ::google::protobuf::Arena* arena, const Impl_& from,
+                          const ReqDeleteFile& from_msg);
+    ::google::protobuf::internal::ArenaStringPtr username_;
+    ::google::protobuf::internal::ArenaStringPtr userid_;
+    ::google::protobuf::internal::ArenaStringPtr filename_;
+    ::google::protobuf::internal::ArenaStringPtr filehash_;
     mutable ::google::protobuf::internal::CachedSize _cached_size_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -7139,6 +7373,210 @@ StatusResp::_internal_uploaded_parts() const {
 inline ::google::protobuf::RepeatedField<::int32_t>* StatusResp::_internal_mutable_uploaded_parts() {
   ::google::protobuf::internal::TSanRead(&_impl_);
   return &_impl_.uploaded_parts_;
+}
+
+// -------------------------------------------------------------------
+
+// ReqDeleteFile
+
+// string username = 1;
+inline void ReqDeleteFile::clear_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.ClearToEmpty();
+}
+inline const std::string& ReqDeleteFile::username() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqDeleteFile.username)
+  return _internal_username();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqDeleteFile::set_username(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqDeleteFile.username)
+}
+inline std::string* ReqDeleteFile::mutable_username() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_username();
+  // @@protoc_insertion_point(field_mutable:file.ReqDeleteFile.username)
+  return _s;
+}
+inline const std::string& ReqDeleteFile::_internal_username() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.username_.Get();
+}
+inline void ReqDeleteFile::_internal_set_username(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.Set(value, GetArena());
+}
+inline std::string* ReqDeleteFile::_internal_mutable_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.username_.Mutable( GetArena());
+}
+inline std::string* ReqDeleteFile::release_username() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqDeleteFile.username)
+  return _impl_.username_.Release();
+}
+inline void ReqDeleteFile::set_allocated_username(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.username_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.username_.IsDefault()) {
+          _impl_.username_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqDeleteFile.username)
+}
+
+// string userid = 2;
+inline void ReqDeleteFile::clear_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.ClearToEmpty();
+}
+inline const std::string& ReqDeleteFile::userid() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqDeleteFile.userid)
+  return _internal_userid();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqDeleteFile::set_userid(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqDeleteFile.userid)
+}
+inline std::string* ReqDeleteFile::mutable_userid() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_userid();
+  // @@protoc_insertion_point(field_mutable:file.ReqDeleteFile.userid)
+  return _s;
+}
+inline const std::string& ReqDeleteFile::_internal_userid() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.userid_.Get();
+}
+inline void ReqDeleteFile::_internal_set_userid(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.Set(value, GetArena());
+}
+inline std::string* ReqDeleteFile::_internal_mutable_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.userid_.Mutable( GetArena());
+}
+inline std::string* ReqDeleteFile::release_userid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqDeleteFile.userid)
+  return _impl_.userid_.Release();
+}
+inline void ReqDeleteFile::set_allocated_userid(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.userid_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.userid_.IsDefault()) {
+          _impl_.userid_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqDeleteFile.userid)
+}
+
+// string filename = 3;
+inline void ReqDeleteFile::clear_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.ClearToEmpty();
+}
+inline const std::string& ReqDeleteFile::filename() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqDeleteFile.filename)
+  return _internal_filename();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqDeleteFile::set_filename(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqDeleteFile.filename)
+}
+inline std::string* ReqDeleteFile::mutable_filename() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_filename();
+  // @@protoc_insertion_point(field_mutable:file.ReqDeleteFile.filename)
+  return _s;
+}
+inline const std::string& ReqDeleteFile::_internal_filename() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.filename_.Get();
+}
+inline void ReqDeleteFile::_internal_set_filename(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.Set(value, GetArena());
+}
+inline std::string* ReqDeleteFile::_internal_mutable_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.filename_.Mutable( GetArena());
+}
+inline std::string* ReqDeleteFile::release_filename() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqDeleteFile.filename)
+  return _impl_.filename_.Release();
+}
+inline void ReqDeleteFile::set_allocated_filename(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filename_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.filename_.IsDefault()) {
+          _impl_.filename_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqDeleteFile.filename)
+}
+
+// string filehash = 4;
+inline void ReqDeleteFile::clear_filehash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filehash_.ClearToEmpty();
+}
+inline const std::string& ReqDeleteFile::filehash() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:file.ReqDeleteFile.filehash)
+  return _internal_filehash();
+}
+template <typename Arg_, typename... Args_>
+inline PROTOBUF_ALWAYS_INLINE void ReqDeleteFile::set_filehash(Arg_&& arg,
+                                                     Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filehash_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:file.ReqDeleteFile.filehash)
+}
+inline std::string* ReqDeleteFile::mutable_filehash() ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  std::string* _s = _internal_mutable_filehash();
+  // @@protoc_insertion_point(field_mutable:file.ReqDeleteFile.filehash)
+  return _s;
+}
+inline const std::string& ReqDeleteFile::_internal_filehash() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.filehash_.Get();
+}
+inline void ReqDeleteFile::_internal_set_filehash(const std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filehash_.Set(value, GetArena());
+}
+inline std::string* ReqDeleteFile::_internal_mutable_filehash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.filehash_.Mutable( GetArena());
+}
+inline std::string* ReqDeleteFile::release_filehash() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:file.ReqDeleteFile.filehash)
+  return _impl_.filehash_.Release();
+}
+inline void ReqDeleteFile::set_allocated_filehash(std::string* value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.filehash_.SetAllocated(value, GetArena());
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+        if (_impl_.filehash_.IsDefault()) {
+          _impl_.filehash_.Set("", GetArena());
+        }
+  #endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:file.ReqDeleteFile.filehash)
 }
 
 #ifdef __GNUC__

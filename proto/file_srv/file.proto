@@ -120,6 +120,13 @@ message StatusResp {
   repeated int32 uploaded_parts = 2;
 }
 
+message ReqDeleteFile {
+  string username = 1;
+  string userid   = 2;
+  string filename = 3;
+  string filehash = 4;
+}
+
 service fileService {
   rpc filedowm(ReqFileDown) returns (Resp) {}
   rpc LoadFile(Reqloadfile) returns (Resp) {}
@@ -132,4 +139,5 @@ service fileService {
   rpc CompleteMultipart(CompleteReq) returns (CompleteResp);
   rpc AbortMultipart(AbortReq) returns (AbortResp);
   rpc Status(StatusReq) returns (StatusResp);
+  rpc DeleteFile(ReqDeleteFile) returns (Resp);
 }

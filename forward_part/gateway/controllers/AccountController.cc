@@ -157,9 +157,11 @@ namespace
 static bool isChannelReady(std::shared_ptr<grpc::Channel> channel)
 {
 	grpc_connectivity_state state =
-		channel->GetState(/*try_to_connect=*/false);
+		channel->GetState(/*try_to_connect=*/true);
 
-	return state == GRPC_CHANNEL_READY;
+	return state == GRPC_CHANNEL_READY ||
+		   state == GRPC_CHANNEL_IDLE ||
+		   state == GRPC_CHANNEL_CONNECTING;
 }
 
 std::shared_ptr<account::accountService::Stub>

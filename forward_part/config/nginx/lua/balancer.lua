@@ -20,7 +20,7 @@ function _M.pick(service_name)
 
     -- 选一个下标：这里用 request_id 做 hash，保证是整数
     local idx
-    local rid = ngx.var.request_id 
+    local rid = ngx.ctx.request_id 
 
     if rid and #servers > 1 then
         -- ngx.crc32_short 返回整数，对字符串安全
