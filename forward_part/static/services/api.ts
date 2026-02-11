@@ -7,7 +7,7 @@ import {
 } from '../types';
 
 
-const BASE_URL = 'http://192.168.149.128:2024';
+const BASE_URL = '';  // 使用相对路径，自动适配当前访问地址
 
 
 class ApiService {
