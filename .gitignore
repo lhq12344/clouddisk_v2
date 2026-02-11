@@ -24,18 +24,21 @@ vendor/
 # Logs
 *.log
 
+# Nacos cache files (contains sensitive credentials)
+**/nacos/cache/
+**/nacos/log/
+
 # Temporary files
 *.tmp
 tmp/
-<<<<<<< HEAD
-=======
 
 # Nacos local cache & logs
-other_srv/store_srv/log/other_srv/store_srv/log/
->>>>>>> d5a51f9 (chore: ignore nacos log/cache directory)
 other_srv/store_srv/log/
+backword_part/*/log/nacos/cache/
+backword_part/log/nacos/cache/
 
 # runtime logs / nacos cache
 log/nacos
+**/nacos/cache/
 
 
