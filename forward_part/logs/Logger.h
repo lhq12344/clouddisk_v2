@@ -29,4 +29,10 @@ private:
 #define LOG_ERROR(...) SPDLOG_LOGGER_ERROR(GlobalLogger::get(), __VA_ARGS__)
 #define LOG_CRITICAL(...) SPDLOG_LOGGER_CRITICAL(GlobalLogger::get(), __VA_ARGS__)
 
+// ------ 带 request_id 的日志宏（参数传递，不用 thread_local） ------
+#define LOG_INFO_RID(rid, fmt, ...) SPDLOG_LOGGER_INFO(GlobalLogger::get(), "[rid:{}] " fmt, rid, ##__VA_ARGS__)
+#define LOG_DEBUG_RID(rid, fmt, ...) SPDLOG_LOGGER_DEBUG(GlobalLogger::get(), "[rid:{}] " fmt, rid, ##__VA_ARGS__)
+#define LOG_WARN_RID(rid, fmt, ...) SPDLOG_LOGGER_WARN(GlobalLogger::get(), "[rid:{}] " fmt, rid, ##__VA_ARGS__)
+#define LOG_ERROR_RID(rid, fmt, ...) SPDLOG_LOGGER_ERROR(GlobalLogger::get(), "[rid:{}] " fmt, rid, ##__VA_ARGS__)
+
 #endif // GLOBAL_LOGGER_H

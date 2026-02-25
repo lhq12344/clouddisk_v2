@@ -15,7 +15,6 @@ import (
 	"gorm.io/gorm"
 
 	"go_test/other_srv/store_srv/localfile"
-	"go_test/other_srv/store_srv/log"
 	"sync"
 )
 
@@ -75,7 +74,7 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 				} else {
 					//TODO:这里可能出现消息丢失，应该加入inbox中，额外一个线程来再次提交
 					// 失败不 Mark，让 Kafka 重投（至少一次）
-					log.Logger.Error("[NewFileUploadConsumer]process message failed", zap.Error(err),
+					internal.Logger.Error("[NewFileUploadConsumer]process message failed", zap.Error(err),
 						zap.Int32("partition", t.msg.Partition),
 						zap.Int64("offset", t.msg.Offset))
 				}
@@ -87,13 +86,13 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 
 // Setup 在新的会话开始时调用（如平衡分区后）
 func (c *FileUploadConsumer) Setup(session sarama.ConsumerGroupSession) error {
-	log.Logger.Info("[Setup]Consumer session setup")
+	internal.Logger.Info("[Setup]Consumer session setup")
 	return nil
 }
 
 // Cleanup 在会话结束时调用（如发生再均衡前）
 func (c *FileUploadConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
-	log.Logger.Info("[Cleanup]Consumer session cleanup, all pending tasks done.")
+	internal.Logger.Info("[Cleanup]Consumer session cleanup, all pending tasks done.")
 	return nil
 }
 
@@ -110,8 +109,24 @@ func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, c
 	return nil
 }
 
+// extractRequestID 从 Kafka 消息 headers 中提取 x-request-id
+func extractRequestID(msg *sarama.ConsumerMessage) string {
+	for _, h := range msg.Headers {
+		if string(h.Key) == "x-request-id" {
+			return string(h.Value)
+		}
+	}
+	return ""
+}
+
 // 实际处理单条消息的逻辑，包括反序列化、缓存检查和OSS上传
 func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.ConsumerMessage) error {
+	rid := extractRequestID(msg)
+	l := internal.Logger
+	if rid != "" {
+		l = l.With(zap.String("request_id", rid))
+	}
+
 	var p UploadCmdPayload
 	if err := json.Unmarshal(msg.Value, &p); err != nil {
 		return fmt.Errorf("unmarshal: %w", err)
@@ -136,7 +151,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 	ossExists, err := c.ossClient.MinIOObjectExists(p.OssKey)
 	if err != nil {
 		// 检查失败不应直接跳过；继续走流程，但记录一下
-		log.Logger.Warn("OSS existence check failed", zap.Error(err), zap.String("ossKey", p.OssKey))
+		l.Warn("OSS existence check failed", zap.Error(err), zap.String("ossKey", p.OssKey))
 		ossExists = false
 	}
 
@@ -156,6 +171,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
 		return err
 	}
+	l.Info("[processMessage]message processed successfully", zap.String("event_id", p.EventID))
 	return nil
 }
 

@@ -9,9 +9,14 @@ public:
 	UploadPartReactor(std::shared_ptr<file::fileService::Stub> stub,
 					  const drogon::HttpRequestPtr &req,
 					  file::UploadPartMeta meta,
+					  std::string requestId,
 					  std::function<void(const drogon::HttpResponsePtr &)> &&callback)
-		: stub_(std::move(stub)), req_(req), meta_(std::move(meta)), callback_(std::move(callback))
+		: stub_(std::move(stub)), req_(req), meta_(std::move(meta)), rid_(std::move(requestId)), callback_(std::move(callback))
 	{
+		if (!rid_.empty())
+		{
+			context_.AddMetadata("x-request-id", rid_);
+		}
 		stub_->async()->UploadPart(&context_, &response_, this);
 		StartCall();
 		request_.mutable_meta()->Swap(&meta_);
@@ -70,6 +75,7 @@ private:
 	file::UploadPartReq request_;
 	file::UploadPartResp response_;
 	int stage_{0};
+	std::string rid_;
 	std::function<void(const drogon::HttpResponsePtr &)> callback_;
 };
 
@@ -137,6 +143,7 @@ bool getArgumentsFromJWT(const HttpRequestPtr &req, drogon::HttpResponsePtr &res
 void FileController::filequeryinfo(const HttpRequestPtr &req,
 								   std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -149,6 +156,8 @@ void FileController::filequeryinfo(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::ReqFileQuery>();
 	auto response = std::make_shared<::file::RespFileQuery>();
 
@@ -174,7 +183,7 @@ void FileController::filequeryinfo(const HttpRequestPtr &req,
 	request->set_userid(std::to_string(userId));
 	request->set_username(name);
 	stub->async()->filequeryinfo(context.get(), request.get(), response.get(),
-								 [context, request, response, callback](::grpc::Status status)
+								 [context, request, response, callback, rid](::grpc::Status status)
 								 {
 									 if (status.ok() && response->code() == 0)
 									 {
@@ -191,14 +200,14 @@ void FileController::filequeryinfo(const HttpRequestPtr &req,
 											 fileJson["filehash"] = fileinfo.file_hash();
 											 ret["filelist"].append(fileJson);
 										 }
-										 LOG_INFO("[filequeryinfo] user:{}   find {} files", request->username(), response->files_size());
+										 LOG_INFO_RID(rid, "[filequeryinfo] user:{}   find {} files", request->username(), response->files_size());
 										 auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 										 resp->setStatusCode(k200OK);
 										 callback(resp);
 									 }
 									 else
 									 {
-										 LOG_INFO("[filequeryinfo] user:{}   find {} files", request->username(), response->files_size());
+										 LOG_INFO_RID(rid, "[filequeryinfo] user:{}   find {} files", request->username(), response->files_size());
 										 Json::Value ret;
 										 ret["error"] = "grpc_error";
 										 ret["details"] = status.error_message();
@@ -211,6 +220,7 @@ void FileController::filequeryinfo(const HttpRequestPtr &req,
 void FileController::filedowm(const HttpRequestPtr &req,
 							  std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -224,6 +234,8 @@ void FileController::filedowm(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::ReqFileDown>();
 	auto response = std::make_shared<::file::Resp>();
 
@@ -244,7 +256,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k400BadRequest);
 		callback(resp);
-		LOG_ERROR("[filedowm] invalid JSON in request");
+		LOG_ERROR_RID(rid, "[filedowm] invalid JSON in request");
 		return;
 	}
 	request->set_filename((*jsonPtr)["filename"].asString());
@@ -253,11 +265,11 @@ void FileController::filedowm(const HttpRequestPtr &req,
 	request->set_username(name);
 	request->set_file_size((*jsonPtr)["file_size"].asInt64());
 	stub->async()->filedowm(context.get(), request.get(), response.get(),
-							[context, request, response, callback](::grpc::Status status)
+							[context, request, response, callback, rid](::grpc::Status status)
 							{
 								if (!status.ok() || response == nullptr)
 								{
-									LOG_INFO("[filedowm] user:{} find {} download file failed",
+									LOG_INFO_RID(rid, "[filedowm] user:{} find {} download file failed",
 											 request->username(), request->filename());
 
 									Json::Value ret;
@@ -278,7 +290,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								resp->setStatusCode(drogon::k200OK);
 								callback(resp);
-								LOG_INFO("[filedowm] user:{} find {} download file oss signed url {}",
+								LOG_INFO_RID(rid, "[filedowm] user:{} find {} download file oss signed url {}",
 										 request->username(), request->filename(), downloadURL);
 							});
 }
@@ -286,6 +298,7 @@ void FileController::filedowm(const HttpRequestPtr &req,
 void FileController::LoadFile(const HttpRequestPtr &req,
 							  std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -298,6 +311,8 @@ void FileController::LoadFile(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::Reqloadfile>();
 	auto response = std::make_shared<::file::Resp>();
 
@@ -327,21 +342,21 @@ void FileController::LoadFile(const HttpRequestPtr &req,
 	request->set_file_size((*jsonPtr)["content"].asString().size());
 	request->set_file_hash(Hash((*jsonPtr)["filename"].asString(), (*jsonPtr)["content"].asString()).sha256());
 	stub->async()->LoadFile(context.get(), request.get(), response.get(),
-							[context, request, response, callback](::grpc::Status status)
+							[context, request, response, callback, rid](::grpc::Status status)
 							{
 								if (status.ok() && response->code() == 0)
 								{
 									Json::Value ret;
 									ret["status"] = response->code();
 									ret["message"] = response->message();
-									LOG_INFO("[LoadFile] user:{}   find {} Load ", request->username(), request->filename());
+									LOG_INFO_RID(rid, "[LoadFile] user:{}   find {} Load ", request->username(), request->filename());
 									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									resp->setStatusCode(k200OK);
 									callback(resp);
 								}
 								else
 								{
-									LOG_INFO("[LoadFile] user:{}   find {} Load file", request->username(), request->filename());
+									LOG_INFO_RID(rid, "[LoadFile] user:{}   find {} Load file", request->username(), request->filename());
 									Json::Value ret;
 									ret["error"] = "grpc_error";
 									ret["details"] = status.error_message();
@@ -355,6 +370,7 @@ void FileController::LoadFile(const HttpRequestPtr &req,
 void FileController::Showfile(const HttpRequestPtr &req,
 							  std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -367,6 +383,8 @@ void FileController::Showfile(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::Reqshowfile>();
 	auto response = std::make_shared<::file::Resp>();
 
@@ -385,7 +403,7 @@ void FileController::Showfile(const HttpRequestPtr &req,
 		ret["error"] = "invalid_json";
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k400BadRequest);
-		LOG_ERROR("[Showfile] invalid JSON in request");
+		LOG_ERROR_RID(rid, "[Showfile] invalid JSON in request");
 		callback(resp);
 		return;
 	}
@@ -395,11 +413,11 @@ void FileController::Showfile(const HttpRequestPtr &req,
 	request->set_username(name);
 	request->set_file_size((*jsonPtr)["file_size"].asInt64());
 	stub->async()->Showfile(context.get(), request.get(), response.get(),
-							[context, request, response, callback](::grpc::Status status)
+							[context, request, response, callback, rid](::grpc::Status status)
 							{
 								if (!status.ok() || response == nullptr)
 								{
-									LOG_INFO("[Showfile] user:{} find {} show failed",
+									LOG_INFO_RID(rid, "[Showfile] user:{} find {} show failed",
 											 request->username(), request->filename());
 
 									Json::Value ret;
@@ -408,8 +426,6 @@ void FileController::Showfile(const HttpRequestPtr &req,
 									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									resp->setStatusCode(drogon::k500InternalServerError);
 									callback(resp);
-									LOG_INFO("[Showfile] user:{} find {} show file failed",
-											 request->username(), request->filename());
 									return;
 								}
 
@@ -423,7 +439,7 @@ void FileController::Showfile(const HttpRequestPtr &req,
 								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								resp->setStatusCode(drogon::k200OK);
 								callback(resp);
-								LOG_INFO("[Showfile] user:{} find {} show file oss signed url url{}",
+								LOG_INFO_RID(rid, "[Showfile] user:{} find {} show file oss signed url url{}",
 										 request->username(), request->filename(), previewURL);
 							});
 }
@@ -431,6 +447,7 @@ void FileController::Showfile(const HttpRequestPtr &req,
 void FileController::Initupload(const HttpRequestPtr &req,
 								std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -443,6 +460,8 @@ void FileController::Initupload(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::InitReq>();
 	auto response = std::make_shared<::file::InitResp>();
 
@@ -461,7 +480,7 @@ void FileController::Initupload(const HttpRequestPtr &req,
 		ret["error"] = "invalid_json";
 		auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 		resp->setStatusCode(k400BadRequest);
-		LOG_ERROR("[Showfile] invalid JSON in request");
+		LOG_ERROR_RID(rid, "[Initupload] invalid JSON in request");
 		callback(resp);
 		return;
 	}
@@ -472,11 +491,11 @@ void FileController::Initupload(const HttpRequestPtr &req,
 	if ((*jsonPtr).isMember("content_type"))
 		request->set_content_type((*jsonPtr)["content_type"].asString());
 	stub->async()->InitMultipart(context.get(), request.get(), response.get(),
-								 [context, request, response, callback](::grpc::Status status)
+								 [context, request, response, callback, rid](::grpc::Status status)
 								 {
 									 if (!status.ok() || response == nullptr)
 									 {
-										 LOG_INFO("[Initupload] userid:{} find {} show failed",
+										 LOG_INFO_RID(rid, "[Initupload] userid:{} find {} init failed",
 												  request->user_id(), request->file_name());
 
 										 Json::Value ret;
@@ -485,8 +504,6 @@ void FileController::Initupload(const HttpRequestPtr &req,
 										 auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 										 resp->setStatusCode(drogon::k500InternalServerError);
 										 callback(resp);
-										 LOG_INFO("[Initupload] userid:{} find {} show file failed",
-												  request->user_id(), request->file_name());
 										 return;
 									 }
 
@@ -498,7 +515,7 @@ void FileController::Initupload(const HttpRequestPtr &req,
 									 auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 									 resp->setStatusCode(drogon::k200OK);
 									 callback(resp);
-									 LOG_INFO("[Initupload] user:{} start load find {} ",
+									 LOG_INFO_RID(rid, "[Initupload] user:{} start load find {} ",
 											  request->user_id(), request->file_name());
 								 });
 }
@@ -521,6 +538,7 @@ static bool parseInt(const std::string &s, int &out)
 void FileController::Uploadpart(const HttpRequestPtr &req,
 								std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	// 1) 发现服务
 	auto stub = FindService("file_srv");
 	if (!stub)
@@ -614,12 +632,13 @@ void FileController::Uploadpart(const HttpRequestPtr &req,
 		meta.set_chunk_hash(chunkHash);
 
 	// 6) 启动 client-stream 转发
-	new UploadPartReactor(stub, req, std::move(meta), std::move(callback));
+	new UploadPartReactor(stub, req, std::move(meta), rid, std::move(callback));
 }
 
 void FileController::CompleteMultipart(const HttpRequestPtr &req,
 									   std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -644,6 +663,8 @@ void FileController::CompleteMultipart(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::CompleteReq>();
 	auto response = std::make_shared<::file::CompleteResp>();
 	request->set_upload_id((*jsonPtr)["upload_id"].asString());
@@ -672,6 +693,7 @@ void FileController::CompleteMultipart(const HttpRequestPtr &req,
 void FileController::AbortMultipart(const HttpRequestPtr &req,
 									std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -696,6 +718,8 @@ void FileController::AbortMultipart(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::AbortReq>();
 	auto response = std::make_shared<::file::AbortResp>();
 	request->set_upload_id((*jsonPtr)["upload_id"].asString());
@@ -724,6 +748,7 @@ void FileController::AbortMultipart(const HttpRequestPtr &req,
 void FileController::Status(const HttpRequestPtr &req,
 							std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -748,6 +773,8 @@ void FileController::Status(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::StatusReq>();
 	auto response = std::make_shared<::file::StatusResp>();
 	request->set_upload_id((*jsonPtr)["upload_id"].asString());
@@ -780,6 +807,7 @@ void FileController::Status(const HttpRequestPtr &req,
 void FileController::DeleteFile(const HttpRequestPtr &req,
 								std::function<void(const HttpResponsePtr &)> &&callback) const
 {
+	std::string rid = req->getHeader("X-Request-Id");
 	auto stub = FindService("file_srv");
 	if (!stub)
 	{
@@ -813,6 +841,8 @@ void FileController::DeleteFile(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
+	if (!rid.empty())
+		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::file::ReqDeleteFile>();
 	auto response = std::make_shared<::file::Resp>();
 

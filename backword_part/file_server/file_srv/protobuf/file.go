@@ -108,6 +108,7 @@ type FileServer struct {
 // 文件基本操作
 // -------------------------
 func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, log.Logger)
 	sha1 := req.Filehash
 	filename := req.Filename
 	userID := req.Userid
@@ -116,7 +117,7 @@ func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, erro
 	tx := internal.DB.WithContext(ctx)
 	if err := tx.First(&account, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Logger.Error("[Download]account not found", zap.Error(err))
+			l.Error("[Download]account not found", zap.Error(err))
 			return nil, fmt.Errorf("[Download]account not found")
 		}
 		return nil, err
@@ -142,16 +143,17 @@ func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, erro
 	expiry := 10 * time.Minute
 	u, err := internal.MinIOClient.Client.PresignedGetObject(ctx, internal.MinIOClient.Bucket, objectKey, expiry, reqParams)
 	if err != nil {
-		log.Logger.Error("sign url", zap.Error(err))
+		l.Error("sign url", zap.Error(err))
 		return nil, fmt.Errorf("[Download]generate oss signed url failed: %w", err)
 	}
 
 	// Code: 1 表示返回的是 OSS 下载 URL
-	log.Logger.Info("[Download]download from oss", zap.String("signedUrl", u.String()))
+	l.Info("[Download]download from oss", zap.String("signedUrl", u.String()))
 	return &Resp{Code: 0, Message: u.String()}, nil
 }
 
 func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, log.Logger)
 	userID := req.Userid
 	fileName := req.Filename
 	sha1 := req.FileHash
@@ -165,10 +167,10 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 		var account model.Account
 		if err := tx.First(&account, userID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				log.Logger.Error("[LoadFile]account not found", zap.Error(err))
+				l.Error("[LoadFile]account not found", zap.Error(err))
 				return fmt.Errorf("[LoadFile]account not found")
 			}
-			log.Logger.Error("[LoadFile]User verification failed", zap.Error(err))
+			l.Error("[LoadFile]User verification failed", zap.Error(err))
 			return err
 		}
 
@@ -184,14 +186,14 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 			Columns:   []clause.Column{{Name: "sha1"}}, // 以 sha1 为准
 			DoNothing: true,
 		}).Create(&file).Error; err != nil {
-			log.Logger.Error("[LoadFile]File listFile table insertion failed", zap.Error(err))
+			l.Error("[LoadFile]File listFile table insertion failed", zap.Error(err))
 			return err
 		}
 
 		// 如果是 DoNothing，Create 不会把已有记录的 ID 带回，所以再查一次 ID拿到真正的 ID
 		if file.ID == 0 {
 			if err := tx.Where("sha1 = ?", sha1).First(&file).Error; err != nil {
-				log.Logger.Error("[LoadFile]Cannot find the corresponding file", zap.Error(err))
+				l.Error("[LoadFile]Cannot find the corresponding file", zap.Error(err))
 				return err
 			}
 		}
@@ -207,17 +209,18 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 			Columns:   []clause.Column{{Name: "account_id"}, {Name: "file_id"}, {Name: "name"}},
 			DoNothing: true,
 		}).Create(&uf).Error; err != nil {
-			log.Logger.Error("[LoadFile]User file relationship creation failed", zap.Error(err))
+			l.Error("[LoadFile]User file relationship creation failed", zap.Error(err))
 			return err
 		}
 
 		// 关键：如果文件已经 READY说明已经存在oss，不再触发异步写 OSS,到这里结束
 		if file.Status == "READY" {
-			log.Logger.Info("[LoadFile]The file already exists in the OSS.")
+			l.Info("[LoadFile]The file already exists in the OSS.")
 			return nil
 		}
 
 		//否则写入outbox发送给kafka生产者线程处理
+		rid := internal.RequestIDFromContext(ctx)
 		txID := uuid.NewString()
 		eventID := txID + ":UPLOAD_CMD"
 		p := model.UploadCmdPayload{
@@ -232,6 +235,14 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 			EventType: model.LoadFile,
 		}
 		b, _ := json.Marshal(p)
+
+		// 将 request_id 写入 Outbox Headers
+		headers := map[string]string{}
+		if rid != "" {
+			headers["x-request-id"] = rid
+		}
+		headersJSON, _ := json.Marshal(headers)
+
 		ob := model.Outbox{
 			EventID:     eventID,
 			TxID:        txID,
@@ -239,13 +250,13 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 			Topic:       "file.upload.cmd",
 			Key:         sha1,
 			Payload:     string(b),
-			Headers:     `{}`,
+			Headers:     string(headersJSON),
 			Status:      model.OutboxNew,
 			RetryCount:  0,
 			NextRetryAt: time.Now(),
 		}
 		if err := tx.Create(&ob).Error; err != nil {
-			log.Logger.Error("[LoadFile]Outbox create table failed", zap.Error(err))
+			l.Error("[LoadFile]Outbox create table failed", zap.Error(err))
 			return err
 		}
 
@@ -253,7 +264,7 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 	})
 
 	if err != nil {
-		log.Logger.Error("[LoadFile]Transaction failed rollback", zap.Error(err))
+		l.Error("[LoadFile]Transaction failed rollback", zap.Error(err))
 		return &Resp{Code: 1, Message: err.Error()}, err
 	}
 
@@ -265,6 +276,7 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 }
 
 func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, log.Logger)
 	sha1 := req.Filehash
 	filename := req.Filename
 	userID := req.Userid
@@ -294,14 +306,15 @@ func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, erro
 	expiry := 10 * time.Minute
 	u, err := internal.MinIOClient.Client.PresignedGetObject(ctx, internal.MinIOClient.Bucket, objectKey, expiry, reqParams)
 	if err != nil {
-		log.Logger.Error("sign url", zap.Error(err))
+		l.Error("sign url", zap.Error(err))
 		return nil, fmt.Errorf("[Showfile]generate oss signed url failed: %w", err)
 	}
-	log.Logger.Info("[Showfile]showfile from oss", zap.String("signedUrl", u.String()))
+	l.Info("[Showfile]showfile from oss", zap.String("signedUrl", u.String()))
 	return &Resp{Code: 0, Message: u.String()}, nil
 }
 
 func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, log.Logger)
 	userID := strings.TrimSpace(req.Userid)
 	filename := strings.TrimSpace(req.Filename)
 	filehash := strings.TrimSpace(req.Filehash)
@@ -358,7 +371,7 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 		}
 		return nil
 	}); err != nil {
-		log.Logger.Error("[DeleteFile]db transaction failed", zap.Error(err))
+		l.Error("[DeleteFile]db transaction failed", zap.Error(err))
 		return &Resp{Code: 500, Message: err.Error()}, err
 	}
 
@@ -369,7 +382,7 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 		objectKey := "files/" + sha1
 		err := internal.MinIOClient.Client.RemoveObject(ctx2, internal.MinIOClient.Bucket, objectKey, minio.RemoveObjectOptions{})
 		if err != nil {
-			log.Logger.Warn("[DeleteFile]remove object failed", zap.String("objectKey", objectKey), zap.Error(err))
+			l.Warn("[DeleteFile]remove object failed", zap.String("objectKey", objectKey), zap.Error(err))
 		}
 	}
 
@@ -377,7 +390,6 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 }
 
 func (f FileServer) Filequeryinfo(ctx context.Context, req *ReqFileQuery) (*RespFileQuery, error) {
-
 	userID := req.Userid
 	var resp RespFileQuery
 	var ufs []model.UserFile

@@ -27,8 +27,12 @@ class ApiService {
       headers.set('Content-Type', 'application/json');
     }
 
+    // 生成 X-Request-Id 用于全链路追踪
+    const requestId = crypto.randomUUID();
+    headers.set('X-Request-Id', requestId);
+
     const fullUrl = `${BASE_URL}${endpoint}`;
-    console.debug(`[NETWORK_REQUEST]: ${options.method || 'GET'} -> ${fullUrl}`);
+    console.debug(`[NETWORK_REQUEST][${requestId}]: ${options.method || 'GET'} -> ${fullUrl}`);
 
     try {
       const response = await fetch(fullUrl, {

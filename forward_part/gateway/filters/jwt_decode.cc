@@ -6,6 +6,13 @@ void jwt_decode::doFilter(const HttpRequestPtr &req,
 						  FilterCallback &&fcb,
 						  FilterChainCallback &&fccb)
 {
+	// 提取 X-Request-Id 并存入 request attributes
+	auto requestId = req->getHeader("X-Request-Id");
+	if (!requestId.empty())
+	{
+		req->getAttributes()->insert("X-Request-Id", requestId);
+	}
+
 	auto auth = req->getHeader("Authorization");
 	if (auth.empty() || auth.rfind("Bearer ", 0) != 0)
 	{

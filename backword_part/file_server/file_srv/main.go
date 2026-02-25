@@ -56,7 +56,10 @@ func main() {
 
 	addr := fmt.Sprintf("%v:%d", ip, port)
 	// ---- 2. 创建 gRPC Server ----
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(internal.RequestIDUnaryInterceptor()),
+		grpc.StreamInterceptor(internal.RequestIDStreamInterceptor()),
+	)
 	// 监听退出信号
 	go func() {
 		ElegantExit(grpcServer, lis)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go_test/backword_part/model"
 	"os"
@@ -175,6 +176,19 @@ func (d *OutboxDispatcher) sendOne(ctx context.Context, ob *model.Outbox) error 
 	}
 	if ob.Key != "" {
 		msg.Key = sarama.StringEncoder(ob.Key)
+	}
+
+	// 从 Outbox.Headers 解析并传播到 Kafka headers
+	if ob.Headers != "" && ob.Headers != "{}" {
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(ob.Headers), &headers); err == nil {
+			for k, v := range headers {
+				msg.Headers = append(msg.Headers, sarama.RecordHeader{
+					Key:   []byte(k),
+					Value: []byte(v),
+				})
+			}
+		}
 	}
 
 	_, _, err := d.producer.SendMessage(msg)

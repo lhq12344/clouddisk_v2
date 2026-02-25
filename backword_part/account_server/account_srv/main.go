@@ -42,7 +42,9 @@ func main() {
 
 	addr := fmt.Sprintf("%v:%d", ip, port)
 	// ---- 2. 创建 gRPC Server ----
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(internal.RequestIDUnaryInterceptor()),
+	)
 
 	// consul注册服务
 	accountpb.RegisterAccountServiceServer(grpcServer, &accountpb.AccountServer{})
