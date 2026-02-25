@@ -23,7 +23,7 @@ func init() {
 func NewLogger() (*zap.Logger, *zap.SugaredLogger, error) {
 	// 文件写入器
 	fileWriter := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   "storeSrv.log",
+		Filename:   "/home/lihaoqian/project/clouddisk_v2/log/app.log",
 		MaxSize:    50,
 		MaxBackups: 3,
 		MaxAge:     30,

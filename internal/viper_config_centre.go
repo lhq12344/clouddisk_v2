@@ -43,8 +43,8 @@ func init() {
 		TimeoutMs:           10000,
 		NotLoadCacheAtStart: true,
 		LogLevel:            "debug",
-		LogDir:              "log/nacos/log",
-		CacheDir:            "log/nacos/cache",
+		LogDir:              "/home/lihaoqian/project/clouddisk_v2/log/nacos",
+		CacheDir:            "/home/lihaoqian/project/clouddisk_v2/log/nacos/cache",
 		Username:            "nacos", // ← 重要
 		Password:            "nacos", // ← 重要
 	}
