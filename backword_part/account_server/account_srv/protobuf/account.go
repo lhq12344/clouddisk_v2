@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/md5"
 	"go_test/backword_part/account_server/custom_error"
-	"go_test/backword_part/log"
 	"go_test/backword_part/model"
 	"go_test/internal"
 	"time"
@@ -29,7 +28,7 @@ type AccountServer struct {
 }
 
 func (a *AccountServer) Signin(ctx context.Context, signin *ReqSignin) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	var account model.Account
 	result := internal.DB.Where(&model.Account{Name: signin.Username}).First(&account)
 	if result.RowsAffected == 0 {
@@ -70,7 +69,7 @@ func (a *AccountServer) Signin(ctx context.Context, signin *ReqSignin) (*Resp, e
 
 // Todo要具体返回错误原因
 func (a *AccountServer) Signup(ctx context.Context, signup *ReqSignup) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	var account model.Account
 	result := internal.DB.Where(&model.Account{Name: signup.Username}).First(&account)
 	if result.RowsAffected == 1 {
@@ -98,7 +97,7 @@ func (a *AccountServer) Signup(ctx context.Context, signup *ReqSignup) (*Resp, e
 }
 
 func (c *AccountServer) Userinfo(ctx context.Context, Userinfo *ReqUserinfo) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	var account model.Account
 	result := internal.DB.Where("id = ?", Userinfo.ID).First(&account)
 	if result.RowsAffected == 0 {

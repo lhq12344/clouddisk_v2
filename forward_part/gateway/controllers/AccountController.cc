@@ -192,8 +192,6 @@ void AccountController::signup(const drogon::HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
-	if (!rid.empty())
-		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::account::ReqSignup>();
 	auto response = std::make_shared<::account::Resp>();
 
@@ -211,6 +209,10 @@ void AccountController::signup(const drogon::HttpRequestPtr &req,
 	request->set_username((*jsonPtr)["username"].asString());
 	request->set_password((*jsonPtr)["password"].asString());
 	request->set_email((*jsonPtr)["email"].asString());
+	// 发起异步调用，捕获所有 shared_ptr 以延长生命周期
+	// 注意：std::function 要求 lambda 是可复制的，因此不能捕获 unique_ptr (即使是 move)。
+	// 必须使用 shared_ptr 来管理 stub。
+	context->AddMetadata("x-request-id", rid);
 	stub->async()->Signup(context.get(), request.get(), response.get(),
 						  [callback, context, request, response, rid](::grpc::Status s)
 						  {
@@ -250,8 +252,6 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
-	if (!rid.empty())
-		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::account::ReqSignin>();
 	auto response = std::make_shared<::account::Resp>();
 
@@ -268,6 +268,10 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 	}
 	request->set_username((*jsonPtr)["username"].asString());
 	request->set_password((*jsonPtr)["password"].asString());
+	// 发起异步调用，捕获所有 shared_ptr 以延长生命周期
+	// 注意：std::function 要求 lambda 是可复制的，因此不能捕获 unique_ptr (即使是 move)。
+	// 必须使用 shared_ptr 来管理 stub。
+	context->AddMetadata("x-request-id", rid);
 	stub->async()->Signin(context.get(), request.get(), response.get(),
 						  [callback, context, request, response, rid](::grpc::Status s)
 						  {
@@ -307,7 +311,7 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 										  auto resp = transError("error", err, k500InternalServerError);
 										  callback(resp);
 									  });
-								  LOG_INFO_RID(rid, "[signin] user:{}   user signing in", request->username());
+								  LOG_INFO_RID(rid, "[signin] user:{}   user registering", request->username());
 							  }
 							  else
 							  {
@@ -337,8 +341,6 @@ void AccountController::userinfo(const HttpRequestPtr &req,
 	}
 
 	auto context = std::make_shared<::grpc::ClientContext>();
-	if (!rid.empty())
-		context->AddMetadata("x-request-id", rid);
 	auto request = std::make_shared<::account::ReqUserinfo>();
 	auto response = std::make_shared<::account::Resp>();
 
@@ -362,6 +364,7 @@ void AccountController::userinfo(const HttpRequestPtr &req,
 
 	request->set_username(name);
 	request->set_id(userId);
+	context->AddMetadata("x-request-id", rid);
 	stub->async()->Userinfo(context.get(), request.get(), response.get(),
 							[callback, context, request, response, rid](::grpc::Status s)
 							{
@@ -372,7 +375,7 @@ void AccountController::userinfo(const HttpRequestPtr &req,
 								ret["message"] = response->message();
 								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								callback(resp);
-								LOG_INFO_RID(rid, "[userinfo] user:{}   user info retrieved", request->username());
+								LOG_INFO_RID(rid, "[userinfo] user:{}   user info", request->username());
 							}
 							else{
 								LOG_ERROR_RID(rid, "[userinfo] gRPC Userinfo failed: {} {}", (int)s.error_code(), s.error_message());

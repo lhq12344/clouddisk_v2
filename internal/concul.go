@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"go_test/other_srv/store_srv/log"
 	"math/rand"
 	"sync"
 
@@ -44,7 +43,7 @@ func InitConsul() {
 
 		client, err := api.NewClient(config)
 		if err != nil {
-			log.Logger.Error("consul init fail:" + err.Error())
+			Logger.Error("consul init fail:" + err.Error())
 			return
 		}
 		ConsulClient = client
@@ -76,10 +75,10 @@ func RegisterGrpcService(serviceName, serviceID, host string, port int) error {
 	// 注册服务
 	if err := ConsulClient.Agent().
 		ServiceRegister(registration); err != nil {
-		log.Logger.Error("register service fail:" + err.Error())
+		Logger.Error("register service fail:" + err.Error())
 		return err
 	}
-	log.Logger.Info(fmt.Sprintf("服务注册成功: %s (%s:%d)\n",
+	Logger.Info(fmt.Sprintf("服务注册成功: %s (%s:%d)\n",
 		serviceName, host, port))
 	return nil
 }
@@ -115,10 +114,10 @@ func RegisterGinService(serviceName, serviceID, host string, port int) error {
 	// 注册服务
 	if err := ConsulClient.Agent().
 		ServiceRegister(registration); err != nil {
-		log.Logger.Error("register service fail:" + err.Error())
+		Logger.Error("register service fail:" + err.Error())
 		return err
 	}
-	log.Logger.Info(fmt.Sprintf("服务注册成功: %s (%s:%d)\n",
+	Logger.Info(fmt.Sprintf("服务注册成功: %s (%s:%d)\n",
 		serviceName, host, port))
 	return nil
 }
@@ -129,10 +128,10 @@ func DeregisterService(serviceID string) {
 	if ConsulClient != nil {
 		err := ConsulClient.Agent().ServiceDeregister(serviceID)
 		if err != nil {
-			log.Logger.Error(fmt.Sprintf("服务注销失败:%v", err.Error()))
+			Logger.Error(fmt.Sprintf("服务注销失败:%v", err.Error()))
 			return
 		}
-		log.Logger.Info(fmt.Sprintf("服务已注销:%v", serviceID))
+		Logger.Info(fmt.Sprintf("服务已注销:%v", serviceID))
 	}
 }
 
@@ -144,7 +143,7 @@ func DiscoverService(serviceName string) (string, int, error) {
 		ConsulClient.Health().Service(serviceName, "", true, nil)
 
 	if err != nil {
-		log.Logger.Error(fmt.Sprintf("服务发现失败:%v", err.Error()))
+		Logger.Error(fmt.Sprintf("服务发现失败:%v", err.Error()))
 		return "", 0, err
 	}
 

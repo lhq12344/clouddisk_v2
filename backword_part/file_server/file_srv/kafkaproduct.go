@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"go_test/backword_part/model"
+	"go_test/internal"
 	"os"
 	"sync"
 	"time"
-
-	"go_test/backword_part/log"
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
@@ -65,12 +64,12 @@ func (d *OutboxDispatcher) Start(ctx context.Context) {
 		case <-ctx.Done():
 			close(jobs)
 			wg.Wait()
-			log.Logger.Info("[Start]Outbox dispatcher stopped")
+			internal.Logger.Info("[Start]Outbox dispatcher stopped")
 			return
 		case <-ticker.C:
 			items, err := d.claimBatch(ctx)
 			if err != nil {
-				log.Logger.Error("[Start]Outbox claim batch failed", zap.Error(err))
+				internal.Logger.Error("[Start]Outbox claim batch failed", zap.Error(err))
 				continue
 			}
 			for _, ob := range items {
@@ -98,14 +97,14 @@ func (d *OutboxDispatcher) workerLoop(ctx context.Context, jobs <-chan model.Out
 			if err := d.sendOne(ctx, &ob); err != nil {
 				// 失败：标 FAILED + 退避
 				if uerr := d.markFailed(ctx, ob.ID, ob.RetryCount, err); uerr != nil {
-					log.Logger.Error("[workerLoop]markFailed failed", zap.Uint("id", ob.ID), zap.Error(uerr))
+					internal.Logger.Error("[workerLoop]markFailed failed", zap.Uint("id", ob.ID), zap.Error(uerr))
 				}
 				continue
 			}
 			// 成功：标 SENT
 			if err := d.markSent(ctx, ob.ID); err != nil {
 				// 这里即便更新失败也没法回滚 Kafka 已发送；只能依赖消费端幂等（inbox）
-				log.Logger.Error("[workerLoop]markSent failed (message already sent)", zap.Uint("id", ob.ID), zap.Error(err))
+				internal.Logger.Error("[workerLoop]markSent failed (message already sent)", zap.Uint("id", ob.ID), zap.Error(err))
 			}
 		}
 	}
@@ -128,7 +127,7 @@ func (d *OutboxDispatcher) claimBatch(ctx context.Context) ([]model.Outbox, erro
 			Limit(d.batchSize).
 			Find(&items).Error
 		if err != nil {
-			log.Logger.Error("[claimBatch] error", zap.Error(err))
+			internal.Logger.Error("[claimBatch] error", zap.Error(err))
 			return err
 		}
 		if len(items) == 0 {
@@ -178,11 +177,11 @@ func (d *OutboxDispatcher) sendOne(ctx context.Context, ob *model.Outbox) error 
 		msg.Key = sarama.StringEncoder(ob.Key)
 	}
 
-	// 从 Outbox.Headers 解析并传播到 Kafka headers
+	// 解析 Outbox.Headers，传播到 Kafka RecordHeader（如 x-request-id）
 	if ob.Headers != "" && ob.Headers != "{}" {
-		var headers map[string]string
-		if err := json.Unmarshal([]byte(ob.Headers), &headers); err == nil {
-			for k, v := range headers {
+		var hdrs map[string]string
+		if err := json.Unmarshal([]byte(ob.Headers), &hdrs); err == nil {
+			for k, v := range hdrs {
 				msg.Headers = append(msg.Headers, sarama.RecordHeader{
 					Key:   []byte(k),
 					Value: []byte(v),

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"go_test/backword_part/log"
 	"go_test/backword_part/model"
 	"go_test/internal"
 	"io"
@@ -108,7 +107,7 @@ type FileServer struct {
 // 文件基本操作
 // -------------------------
 func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	sha1 := req.Filehash
 	filename := req.Filename
 	userID := req.Userid
@@ -153,7 +152,7 @@ func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, erro
 }
 
 func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	userID := req.Userid
 	fileName := req.Filename
 	sha1 := req.FileHash
@@ -220,7 +219,6 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 		}
 
 		//否则写入outbox发送给kafka生产者线程处理
-		rid := internal.RequestIDFromContext(ctx)
 		txID := uuid.NewString()
 		eventID := txID + ":UPLOAD_CMD"
 		p := model.UploadCmdPayload{
@@ -236,7 +234,8 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 		}
 		b, _ := json.Marshal(p)
 
-		// 将 request_id 写入 Outbox Headers
+		// 将 request_id 写入 Outbox Headers，供 Kafka 链路追踪
+		rid := internal.RequestIDFromContext(ctx)
 		headers := map[string]string{}
 		if rid != "" {
 			headers["x-request-id"] = rid
@@ -276,7 +275,7 @@ func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, erro
 }
 
 func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	sha1 := req.Filehash
 	filename := req.Filename
 	userID := req.Userid
@@ -314,7 +313,7 @@ func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, erro
 }
 
 func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, log.Logger)
+	l := internal.LoggerWithRID(ctx, internal.Logger)
 	userID := strings.TrimSpace(req.Userid)
 	filename := strings.TrimSpace(req.Filename)
 	filehash := strings.TrimSpace(req.Filehash)
@@ -390,6 +389,7 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 }
 
 func (f FileServer) Filequeryinfo(ctx context.Context, req *ReqFileQuery) (*RespFileQuery, error) {
+
 	userID := req.Userid
 	var resp RespFileQuery
 	var ufs []model.UserFile

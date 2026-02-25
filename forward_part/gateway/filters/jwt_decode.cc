@@ -6,7 +6,7 @@ void jwt_decode::doFilter(const HttpRequestPtr &req,
 						  FilterCallback &&fcb,
 						  FilterChainCallback &&fccb)
 {
-	// 提取 X-Request-Id 并存入 request attributes
+	// 提取 X-Request-Id 存入 request attributes
 	auto requestId = req->getHeader("X-Request-Id");
 	if (!requestId.empty())
 	{

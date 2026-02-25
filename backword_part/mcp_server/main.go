@@ -14,7 +14,6 @@ import (
 
 	accountpb "go_test/backword_part/account_server/account_srv/protobuf"
 	filepb "go_test/backword_part/file_server/file_srv/protobuf"
-	"go_test/backword_part/log"
 	"go_test/internal"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -92,13 +91,13 @@ func main() {
 
 	cfg, err := loadConfig()
 	if err != nil {
-		log.Logger.Error("failed to load config", zap.Error(err))
+		internal.Logger.Error("failed to load config", zap.Error(err))
 		return
 	}
 
 	clients, err := newServiceClients(cfg)
 	if err != nil {
-		log.Logger.Error("mcp grpc clients init failed", zap.Error(err))
+		internal.Logger.Error("mcp grpc clients init failed", zap.Error(err))
 		return
 	}
 	defer clients.Close()
@@ -114,7 +113,7 @@ func main() {
 
 	if strings.EqualFold(cfg.transport, "stdio") {
 		if err := server.ServeStdio(mcpServer); err != nil {
-			log.Logger.Error("mcp stdio server error", zap.Error(err))
+			internal.Logger.Error("mcp stdio server error", zap.Error(err))
 		}
 		return
 	}
@@ -134,7 +133,7 @@ func main() {
 		server.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			uidStr := strings.TrimSpace(r.Header.Get("X-User-Id"))
 			uname := strings.TrimSpace(r.Header.Get("X-Username"))
-			log.Logger.Info("mcp incoming headers",
+			internal.Logger.Info("mcp incoming headers",
 				zap.String("path", r.URL.Path),
 				zap.String("x-user-id", uidStr),
 				zap.String("x-username", uname),
@@ -190,7 +189,7 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Logger.Info("mcp server listening",
+	internal.Logger.Info("mcp server listening",
 		zap.String("address", cfg.httpAddr),
 		zap.String("base_path", cfg.basePath),
 		zap.String("base_url", cfg.baseURL),
@@ -198,7 +197,7 @@ func main() {
 
 	// 用我们自己的 httpSrv 启动，而不是 sseServer.Start（避免 /health 无法挂载）
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Logger.Error("mcp http server error", zap.Error(err))
+		internal.Logger.Error("mcp http server error", zap.Error(err))
 	}
 }
 
@@ -206,7 +205,7 @@ func main() {
 func FindServer(key string) (string, error) {
 	srvHost, srvPort, err := internal.DiscoverService(key)
 	if err != nil {
-		log.Logger.Error("find server failed", zap.String("key", key), zap.Error(err))
+		internal.Logger.Error("find server failed", zap.String("key", key), zap.Error(err))
 		return "", fmt.Errorf("discover service failed: %w", err)
 	}
 	return fmt.Sprintf("%s:%d", srvHost, srvPort), nil

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"go_test/backword_part/account_server/account_srv/protobuf"
-	"go_test/backword_part/log"
 	"go_test/internal"
 	"net"
 	"os"
@@ -59,11 +58,11 @@ func main() {
 		ip,
 		port)
 	if err != nil {
-		log.Logger.Error("account_srv 注册失败")
+		internal.Logger.Error("account_srv 注册失败")
 		return
 	}
 
-	log.Logger.Info("gRPC Account Service running on " + addr)
+	internal.Logger.Info("gRPC Account Service running on " + addr)
 
 	// ---- 4. 直接 Serve(lis)，不要再次 net.Listen！----
 	if err := grpcServer.Serve(lis); err != nil {

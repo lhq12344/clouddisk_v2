@@ -109,22 +109,13 @@ func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, c
 	return nil
 }
 
-// extractRequestID 从 Kafka 消息 headers 中提取 x-request-id
-func extractRequestID(msg *sarama.ConsumerMessage) string {
-	for _, h := range msg.Headers {
-		if string(h.Key) == "x-request-id" {
-			return string(h.Value)
-		}
-	}
-	return ""
-}
-
 // 实际处理单条消息的逻辑，包括反序列化、缓存检查和OSS上传
 func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.ConsumerMessage) error {
-	rid := extractRequestID(msg)
+	// 从 Kafka headers 提取 x-request-id，创建带 request_id 的 logger
+	rid := extractKafkaRequestID(msg)
 	l := internal.Logger
 	if rid != "" {
-		l = l.With(zap.String("request_id", rid))
+		l = internal.Logger.With(zap.String("request_id", rid))
 	}
 
 	var p UploadCmdPayload
@@ -171,7 +162,6 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
 		return err
 	}
-	l.Info("[processMessage]message processed successfully", zap.String("event_id", p.EventID))
 	return nil
 }
 
@@ -277,4 +267,14 @@ func (c *FileUploadConsumer) getSession() sarama.ConsumerGroupSession {
 	c.sessionMu.RLock()
 	defer c.sessionMu.RUnlock()
 	return c.session
+}
+
+// extractKafkaRequestID 从 Kafka 消息 headers 中提取 x-request-id
+func extractKafkaRequestID(msg *sarama.ConsumerMessage) string {
+	for _, h := range msg.Headers {
+		if h != nil && string(h.Key) == "x-request-id" {
+			return string(h.Value)
+		}
+	}
+	return ""
 }

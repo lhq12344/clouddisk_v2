@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	filepb "go_test/backword_part/file_server/file_srv/protobuf"
-	"go_test/backword_part/log"
 	"go_test/internal"
 	"net"
 	"os"
@@ -22,7 +21,7 @@ func ElegantExit(s *grpc.Server, lis net.Listener) {
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-ch
-	log.Logger.Info("received signal, shutting down", zap.String("signal", sig.String()))
+	internal.Logger.Info("received signal, shutting down", zap.String("signal", sig.String()))
 
 	// 1) 停止接收新连接并等待在途请求完成
 	s.GracefulStop()
@@ -30,7 +29,7 @@ func ElegantExit(s *grpc.Server, lis net.Listener) {
 	// 2) 关闭 listener
 	_ = lis.Close()
 	internal.DeregisterService("consul退出")
-	log.Logger.Info("shutdown complete")
+	internal.Logger.Info("shutdown complete")
 }
 
 // ListenAutoPort AutoPort 自动寻找空闲的port
@@ -77,7 +76,7 @@ func main() {
 		ip,
 		port)
 	if err != nil {
-		log.Logger.Error(err.Error())
+		internal.Logger.Error(err.Error())
 		return
 	}
 
@@ -85,10 +84,10 @@ func main() {
 	internal.InitKafkaProducer()
 	dispatcher := NewOutboxDispatcher(internal.DB, internal.KafkaProducer)
 	go dispatcher.Start(ctx)
-	log.Logger.Info("kafka producer is running")
+	internal.Logger.Info("kafka producer is running")
 
 	// ---- 5. 直接 Serve(lis)，不要再次 net.Listen！----
-	log.Logger.Info("gRPC File Service running on " + addr)
+	internal.Logger.Info("gRPC File Service running on " + addr)
 	if err := grpcServer.Serve(lis); err != nil {
 		panic(err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go_test/other_srv/store_srv/log"
 
 	"github.com/IBM/sarama"
 )
@@ -38,7 +37,7 @@ func InitKafkaProducer() {
 		panic(err)
 	}
 	KafkaProducer = producer
-	log.Logger.Info("[InitKafkaProducer]Kafka producer created")
+	Logger.Info("[InitKafkaProducer]Kafka producer created")
 }
 
 // ProduceFileUploadMsg 发送消息到 Kafka
