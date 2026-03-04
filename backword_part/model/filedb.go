@@ -84,9 +84,9 @@ type Outbox struct {
 type InboxStatus string
 
 const (
-	InboxProcessing InboxStatus = "PROCESSING"
-	InboxDone       InboxStatus = "DONE"
-	InboxFailed     InboxStatus = "FAILED"
+	InboxProcessing InboxStatus = "PROCESSING" // 处理中
+	InboxDone       InboxStatus = "DONE"       // 已完成（幂等，跳过）
+	InboxDLQ        InboxStatus = "DLQ"        // 已进入死信队列
 )
 
 type Inbox struct {
@@ -96,6 +96,7 @@ type Inbox struct {
 	LockedUntil *time.Time  `gorm:"index"`
 	Attempts    int         `gorm:"not null;default:0"`
 	LastError   string      `gorm:"type:text"`
+	DLQFailureID *uint      `gorm:"index;comment:关联的DLQ失败记录ID"` // 新增：关联 DLQ
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Messages    string       `gorm:"type:varchar(128);default:null"`

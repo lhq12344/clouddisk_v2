@@ -1,0 +1,89 @@
+# Store Service 配置文件
+
+kafka:
+  brokers:
+    - "192.168.149.128:31092"
+
+  # 主消费者配置
+  consumer:
+    group_id: "store_srv_group"
+    topics:
+      - "file.upload.cmd"
+    worker_count: 10
+
+    # 重试配置
+    retry:
+      max_retries: 3                # 最大重试次数
+      initial_backoff: 1s           # 初始退避时间
+      max_backoff: 30s              # 最大退避时间
+      backoff_multiplier: 2.0       # 退避倍数
+
+  # DLQ 配置
+  dlq:
+    enabled: true
+    topic: "file.upload.cmd.dlq"
+
+    # DLQ 消费者配置
+    consumer:
+      group_id: "store_srv_dlq_group"
+      poll_interval: 5m             # 轮询间隔（低频处理）
+      batch_size: 10                # 每次处理的消息数
+      max_retries: 1                # DLQ 消息的最大重试次数
+
+    # 告警配置
+    alerts:
+      enabled: true
+      threshold: 100                # DLQ 消息数阈值
+      error_rate_threshold: 0.05    # 错误率阈值（5%）
+
+      # 告警通道
+      channels:
+        - type: "email"
+          recipients:
+            - "ops@example.com"
+        - type: "slack"
+          webhook: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+        - type: "dingtalk"
+          webhook: "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN"
+
+    # 清理配置
+    cleanup:
+      enabled: true
+      retention_days: 30            # 已解决消息保留天数
+      cleanup_interval: 24h         # 清理间隔
+
+# 数据库配置
+database:
+  host: "localhost"
+  port: 3306
+  user: "root"
+  password: "your_password"
+  database: "clouddisk"
+  max_connections: 50
+  max_idle_connections: 10
+
+# OSS 配置
+oss:
+  type: "minio"  # minio 或 alioss
+  endpoint: "localhost:9000"
+  access_key: "your_access_key"
+  secret_key: "your_secret_key"
+  bucket: "clouddisk"
+  use_ssl: false
+
+# 日志配置
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json" # json 或 console
+  output: "stdout" # stdout 或文件路径
+
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_interval: 5m            # 指标收集间隔
+
+  # Prometheus 配置
+  prometheus:
+    enabled: true
+    port: 9090
+    path: "/metrics"

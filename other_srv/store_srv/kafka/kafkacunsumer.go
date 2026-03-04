@@ -44,10 +44,12 @@ type FileUploadConsumer struct {
 	sessionMu   sync.RWMutex
 	session     sarama.ConsumerGroupSession
 	instanceID  string
+	retryConfig RetryConfig    // 重试配置
+	dlqProducer *DLQProducer   // DLQ 生产者
 }
 
 // NewFileUploadConsumer 构造函数，创建消费者处理实例并初始化协程池
-func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadConsumer {
+func NewFileUploadConsumer(ctx context.Context, workerCount int, dlqProducer *DLQProducer) *FileUploadConsumer {
 	host, _ := os.Hostname()
 	instanceID := fmt.Sprintf("%s-%d", host, os.Getpid())
 
@@ -57,6 +59,8 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 		taskCh:      make(chan *Task, workerCount*2), // 缓冲队列
 		localFile:   &localfile.LoadFile{},
 		instanceID:  instanceID,
+		retryConfig: DefaultRetryConfig(),
+		dlqProducer: dlqProducer,
 	}
 	// 启动 workerCount 个后台协程从队列中消费任务
 	for i := 0; i < workerCount; i++ {
@@ -64,19 +68,22 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int) *FileUploadCons
 		go func(ctx context.Context) {
 			defer c.wg.Done()
 			for t := range c.taskCh {
-				err := c.processMessage(ctx, t.msg)
+				err := c.processMessageWithRetry(ctx, t.msg)
 				if err == nil {
-					// 仅在成功时提交 offset
-					// session 可能已结束：这里做一次保护
+					// 成功：提交 offset
 					if t.session != nil && t.session.Context().Err() == nil {
 						t.session.MarkMessage(t.msg, "")
 					}
 				} else {
-					//TODO:这里可能出现消息丢失，应该加入inbox中，额外一个线程来再次提交
-					// 失败不 Mark，让 Kafka 重投（至少一次）
-					internal.Logger.Error("[NewFileUploadConsumer]process message failed", zap.Error(err),
+					// 重试耗尽或不可重试错误：发送到 DLQ 并提交 offset
+					internal.Logger.Error("[NewFileUploadConsumer]process message failed after retries",
+						zap.Error(err),
 						zap.Int32("partition", t.msg.Partition),
 						zap.Int64("offset", t.msg.Offset))
+					// 注意：DLQ 发送失败也要提交 offset，避免无限循环
+					if t.session != nil && t.session.Context().Err() == nil {
+						t.session.MarkMessage(t.msg, "")
+					}
 				}
 			}
 		}(ctx)
@@ -107,6 +114,68 @@ func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, c
 		}
 	}
 	return nil
+}
+
+// processMessageWithRetry 带重试的消息处理
+func (c *FileUploadConsumer) processMessageWithRetry(ctx context.Context, msg *sarama.ConsumerMessage) error {
+	var lastErr error
+	retryCount := 0
+
+	for retryCount <= c.retryConfig.MaxRetries {
+		err := c.processMessage(ctx, msg)
+		if err == nil {
+			// 成功
+			return nil
+		}
+
+		lastErr = err
+
+		// 判断是否可重试
+		if !IsRetryableError(err) {
+			// 不可重试错误：直接发送到 DLQ
+			internal.Logger.Warn("[processMessageWithRetry]Non-retryable error, sending to DLQ",
+				zap.Error(err),
+				zap.Int64("offset", msg.Offset),
+				zap.String("error_category", string(CategorizeError(err))))
+
+			if c.dlqProducer != nil {
+				_ = c.dlqProducer.SendToDLQ(ctx, msg, err, retryCount)
+			}
+			return err
+		}
+
+		// 可重试错误：执行重试
+		if retryCount < c.retryConfig.MaxRetries {
+			backoff := c.retryConfig.CalculateBackoff(retryCount + 1)
+			internal.Logger.Warn("[processMessageWithRetry]Retrying after backoff",
+				zap.Error(err),
+				zap.Int("retry_count", retryCount+1),
+				zap.Duration("backoff", backoff),
+				zap.Int64("offset", msg.Offset))
+
+			select {
+			case <-time.After(backoff):
+				// 继续重试
+			case <-ctx.Done():
+				// 上下文取消
+				return ctx.Err()
+			}
+		}
+
+		retryCount++
+	}
+
+	// 重试次数耗尽：发送到 DLQ
+	internal.Logger.Error("[processMessageWithRetry]Max retries exceeded, sending to DLQ",
+		zap.Error(lastErr),
+		zap.Int("retry_count", retryCount),
+		zap.Int64("offset", msg.Offset))
+
+	if c.dlqProducer != nil {
+		_ = c.dlqProducer.SendToDLQ(ctx, msg, lastErr, retryCount)
+	}
+
+	return lastErr
 }
 
 // 实际处理单条消息的逻辑，包括反序列化、缓存检查和OSS上传
@@ -151,7 +220,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		switch p.EventType {
 		case model.LoadFile:
 			if err := c.ossClient.MinIOUploadBytes([]byte(p.Content), p.OssKey, p.Type); err != nil {
-				_ = c.markInboxFailed(ctx, p.EventID, err.Error())
+				_ = c.markInboxDLQ(ctx, p.EventID, err.Error())
 				return fmt.Errorf("upload oss: %w", err)
 			}
 		}
@@ -159,7 +228,7 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 
 	// 7) 更新业务状态（files.status=READY 等）+ inbox DONE
 	if err := c.finalizeSuccess(ctx, &p); err != nil {
-		_ = c.markInboxFailed(ctx, p.EventID, err.Error())
+		_ = c.markInboxDLQ(ctx, p.EventID, err.Error())
 		return err
 	}
 	return nil
@@ -240,17 +309,17 @@ func (c *FileUploadConsumer) tryBeginInbox(ctx context.Context, eventID string) 
 	return true, false, nil
 }
 
-func (c *FileUploadConsumer) markInboxFailed(ctx context.Context, eventID, errMsg string) error {
+func (c *FileUploadConsumer) markInboxDLQ(ctx context.Context, eventID, errMsg string) error {
 	now := time.Now()
 	return internal.DB.WithContext(ctx).Model(&model.Inbox{}).
 		Where("event_id = ? AND locked_by = ?", eventID, c.instanceID).
 		Updates(map[string]any{
-			"status":       model.InboxFailed,
+			"status":       model.InboxDLQ,
 			"last_error":   errMsg,
 			"locked_until": nil,
 			"locked_by":    "",
 			"updated_at":   now,
-		}).Error
+		}).Err()
 }
 
 // 你可以用 mysql driver 的错误码 1062；这里给一个通用兜底
