@@ -132,7 +132,22 @@ func (d *DLQConsumer) processFailure(failure *model.DLQFailure) {
 	d.logger.Info("[DLQConsumer]Processing DLQ failure",
 		zap.Uint("id", failure.ID),
 		zap.String("event_id", failure.EventID),
+		zap.String("file_hash", failure.FileHash),
 		zap.Int("failure_count", failure.FailureCount))
+
+	// 【新增】检查文件是否已经成功上传到 OSS
+	if d.checkFileAlreadyInOSS(failure) {
+		d.logger.Info("[DLQConsumer]File already uploaded to OSS, deleting DLQ record",
+			zap.Uint("id", failure.ID),
+			zap.String("event_id", failure.EventID),
+			zap.String("file_hash", failure.FileHash))
+
+		// 标记为已解决并删除
+		if err := d.markResolvedAndCleanup(failure.ID, "File already in OSS"); err != nil {
+			d.logger.Error("[DLQConsumer]Failed to cleanup DLQ record", zap.Error(err))
+		}
+		return
+	}
 
 	// 更新状态为 retrying
 	if err := d.updateStatus(failure.ID, model.DLQStatusRetrying); err != nil {
@@ -199,6 +214,96 @@ func (d *DLQConsumer) updateStatus(id uint, status model.DLQStatus) error {
 	return internal.DB.Model(&model.DLQFailure{}).
 		Where("id = ?", id).
 		Update("status", status).Error
+}
+
+// checkFileAlreadyInOSS 检查文件是否已经成功上传到 OSS
+func (d *DLQConsumer) checkFileAlreadyInOSS(failure *model.DLQFailure) bool {
+	// 如果没有 FileHash，无法检查
+	if failure.FileHash == "" {
+		d.logger.Debug("[DLQConsumer]No file hash, cannot check OSS status",
+			zap.Uint("id", failure.ID))
+		return false
+	}
+
+	// 查询 File 表，检查状态是否为 success
+	var file model.File
+	err := internal.DB.Where("sha1 = ?", failure.FileHash).First(&file).Error
+
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			d.logger.Debug("[DLQConsumer]File not found in database",
+				zap.String("file_hash", failure.FileHash))
+			return false
+		}
+		d.logger.Error("[DLQConsumer]Failed to query file status",
+			zap.Error(err),
+			zap.String("file_hash", failure.FileHash))
+		return false
+	}
+
+	// 检查文件状态是否为 success
+	if file.Status == model.FileSuccess {
+		d.logger.Info("[DLQConsumer]File already uploaded to OSS",
+			zap.String("file_hash", failure.FileHash),
+			zap.Uint("file_id", file.ID),
+			zap.Int64("size", file.Size))
+		return true
+	}
+
+	d.logger.Debug("[DLQConsumer]File exists but not uploaded yet",
+		zap.String("file_hash", failure.FileHash),
+		zap.String("status", file.Status))
+	return false
+}
+
+// markResolvedAndCleanup 标记为已解决并清理（文件已在 OSS 的情况）
+func (d *DLQConsumer) markResolvedAndCleanup(id uint, resolution string) error {
+	return internal.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 查询 DLQ 记录
+		var failure model.DLQFailure
+		if err := tx.First(&failure, id).Error; err != nil {
+			return err
+		}
+
+		// 2. 更新 DLQ 状态为 resolved
+		now := time.Now()
+		if err := tx.Model(&failure).Updates(map[string]interface{}{
+			"status":      model.DLQStatusResolved,
+			"resolved_at": &now,
+			"resolved_by": "dlq_consumer_auto_cleanup",
+			"resolution":  resolution,
+		}).Error; err != nil {
+			return err
+		}
+
+		// 3. 同步更新 Inbox 状态为 DONE（文件已在 OSS，视为成功）
+		if failure.EventID != "" {
+			err := tx.Model(&model.Inbox{}).
+				Where("event_id = ?", failure.EventID).
+				Updates(map[string]interface{}{
+					"status":     model.InboxDone,
+					"last_error": "",
+					"updated_at": now,
+				}).Error
+
+			if err != nil {
+				d.logger.Warn("[DLQConsumer]Failed to update Inbox status to DONE",
+					zap.Error(err),
+					zap.String("event_id", failure.EventID))
+				// 不返回错误，DLQ 已标记为 resolved
+			} else {
+				d.logger.Info("[DLQConsumer]Updated Inbox status to DONE (file already in OSS)",
+					zap.String("event_id", failure.EventID))
+			}
+		}
+
+		d.logger.Info("[DLQConsumer]DLQ record cleaned up",
+			zap.Uint("id", id),
+			zap.String("event_id", failure.EventID),
+			zap.String("file_hash", failure.FileHash))
+
+		return nil
+	})
 }
 
 // updateStatusWithError 更新状态并记录错误

@@ -22,6 +22,14 @@ type Inbox struct {
 }
 ```
 
+### 3. DLQ 消费者新增 OSS 状态检查 ⭐ NEW
+
+在重试之前，先检查文件是否已经成功上传到 OSS：
+- ✅ 如果文件已在 OSS → 直接清理 DLQ 记录，更新 Inbox 为 DONE
+- ⚠️ 如果文件未在 OSS → 继续执行重试逻辑
+
+详见: `DLQ_OSS_CHECK.md`
+
 ## 状态流转
 
 ```
@@ -35,14 +43,17 @@ type Inbox struct {
     - locked_by = ""        ← 释放锁
     - locked_until = NULL   ← 清除锁超时
     ↓
-DLQ Consumer 处理
+DLQ Consumer 轮询处理
     ↓
-成功恢复
-    ↓
-更新 Inbox:
-    - status = DONE
-    - last_error = ""
-    - dlq_failure_id 保留（用于追溯）
+检查文件是否在 OSS？ ⭐ NEW
+    ├─ 是 → 自动清理 DLQ → 更新 Inbox 为 DONE → 结束
+    └─ 否 → 继续重试逻辑
+              ↓
+          重新处理消息
+              ↓
+          成功恢复？
+              ├─ 是 → 更新 Inbox 为 DONE
+              └─ 否 → 继续重试或标记为最终失败
 ```
 
 ## 关键代码位置
