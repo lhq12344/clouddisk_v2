@@ -31,7 +31,7 @@ func init() {
 	// 1. Nacos 服务配置
 	serverConfigs := []constant.ServerConfig{
 		{
-			IpAddr: "192.168.149.128",
+			IpAddr: "127.0.0.1",
 			Port:   30848, // NodePort
 			Scheme: "http",
 		},
@@ -49,7 +49,7 @@ func init() {
 		Password:            "nacos", // ← 重要
 	}
 	Logger.Info("Creating Nacos client...",
-		zap.String("server", "192.168.149.128:30848"),
+		zap.String("server", "127.0.0.1:30848"),
 		zap.String("namespace", clientConfig.NamespaceId))
 
 	client, err := clients.NewConfigClient(vo.NacosClientParam{

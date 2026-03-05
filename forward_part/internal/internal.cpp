@@ -50,50 +50,59 @@ public:
 
 void InitAppConfig()
 {
-
-	// 1. 创建 Properties
-	Properties props;
-	props[PropertyKeyConst::SERVER_ADDR] = "192.168.149.128:30848";
-	props[PropertyKeyConst::NAMESPACE] = "ce99961c-0fcf-4f4f-81d6-ac2183f24df1";
-	props[PropertyKeyConst::AUTH_USERNAME] = "nacos";
-	props[PropertyKeyConst::AUTH_PASSWORD] = "nacos";
-	// 2. 正确的工厂（旧版 API）
-	INacosServiceFactory *factory = NacosFactoryFactory::getNacosFactory(props);
-	ResourceGuard<INacosServiceFactory> guardFactory(factory);
-
-	// 3. 创建 ConfigService
-	ConfigService *configSvc = factory->CreateConfigService();
-	ResourceGuard<ConfigService> guardConfig(configSvc);
-
-	// 4. 监听配置
-	ConfigListener *listener = new ConfigListener();
-	configSvc->addListener("clouddisk.json", "dev", listener);
-
-	// 5. 获取初始配置
-	NacosString content;
 	try
 	{
-		content = configSvc->getConfig("clouddisk.json", "dev", 5000);
+		// 使用本地配置文件（避免 Nacos C++ SDK 兼容性问题）
+		std::string configFile = "config.json";
+
+		// 尝试多个可能的配置文件路径
+		std::vector<std::string> possiblePaths = {
+			"config.json",
+			"../config.json",
+			"/home/lihaoqian/project/clouddisk_v2/forward_part/gateway/config.json"
+		};
+
+		std::string configContent;
+		bool found = false;
+
+		for (const auto& path : possiblePaths) {
+			std::ifstream file(path);
+			if (file.is_open()) {
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				configContent = buffer.str();
+				found = true;
+				std::cout << "[Config] Loaded from: " << path << std::endl;
+				break;
+			}
+		}
+
+		if (!found) {
+			std::cerr << "[ERROR] Config file not found!" << std::endl;
+			LOG_ERROR("[ERROR] Config file not found!");
+			return;
+		}
+
+		if (configContent.empty())
+		{
+			std::cerr << "[ERROR] empty config!" << std::endl;
+			LOG_ERROR("[ERROR] empty config!");
+			return;
+		}
+
+		std::cout << "[Config] Loaded successfully" << std::endl;
+		ConfigListener::LoadConfigFromString(configContent);
 	}
-	catch (NacosException &e)
+	catch (std::exception &e)
 	{
-		std::cerr << "[ERROR] getConfig failed: "
-				  << e.errorcode() << " " << e.what() << std::endl;
-		LOG_ERROR("[ERROR] getConfig failed: ", e.errorcode(), e.what());
-		return;
+		std::cerr << "[FATAL] InitAppConfig exception: " << e.what() << std::endl;
+		LOG_ERROR("[FATAL] InitAppConfig exception: ", e.what());
 	}
-
-	if (content.empty())
+	catch (...)
 	{
-		std::cerr << "[ERROR] empty config!" << std::endl;
-		LOG_ERROR("[ERROR] empty config!");
-		return;
+		std::cerr << "[FATAL] InitAppConfig unknown exception" << std::endl;
+		LOG_ERROR("[FATAL] InitAppConfig unknown exception");
 	}
-
-	std::cout << "[Nacos] Initial config:\n"
-			  << content << std::endl;
-
-	ConfigListener::LoadConfigFromString(content);
 }
 
 // 获取未占用的port

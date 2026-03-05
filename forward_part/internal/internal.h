@@ -3,6 +3,9 @@
 
 #pragma once
 #include <string>
+#include <fstream>
+#include <sstream>
+#include <vector>
 #include "Nacos.h"
 #include <nlohmann/json.hpp>
 #include <iostream>

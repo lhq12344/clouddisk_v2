@@ -7,7 +7,8 @@ int main()
 	// 获取ip和port
 	InitAppConfig();
 	auto &cfg = AppConfig::getInstance();
-	std::string host = cfg.consul.gateway_srv.host;
+	std::string registerHost = cfg.consul.gateway_srv.host; // 注册到 Consul 的地址
+	std::string listenHost = "0.0.0.0"; // 监听地址
 	int port = GetFreePort();
 	std::string SigningKey = cfg.jwt.secret;
 	std::string consulHost = cfg.consul.host;
@@ -24,21 +25,25 @@ int main()
 		consulPort,
 		serviceName,
 		serviceId,
-		host,
+		registerHost, // 使用注册地址
 		port);
 	// 启动 Drogon HTTP 服务
-	drogon::app().addListener(host, port);
+	drogon::app().addListener(listenHost, port); // 监听在 0.0.0.0
 
-	// 启动前注册到 Consul
+	// 在服务器启动后注册到 Consul
 	drogon::app().registerBeginningAdvice([&]()
-										  { 
+										  {
 											MyAppData::instance().consulHost = consulHost;
 											MyAppData::instance().consulPort = consulPort;
 											MyAppData::instance().kafkaHost = kafkaHost;
 											MyAppData::instance().kafkaPort = kafkaPort;
 											MyAppData::instance().SigningKey = SigningKey;
-											consulRegister.registerService(); });
-	LOG_INFO("[drogon]Server started:{}:{} ", host, port);
+
+											// 延迟注册，确保事件循环已启动
+											drogon::app().getLoop()->queueInLoop([&consulRegister]() {
+												consulRegister.registerService();
+											}); });
+	LOG_INFO("[drogon]Server started:{}:{} ", listenHost, port);
 	drogon::app().run();
 	return 0;
 }

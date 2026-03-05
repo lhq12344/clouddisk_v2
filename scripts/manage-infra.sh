@@ -18,6 +18,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 获取脚本目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+YAML_DIR="${SCRIPT_DIR}/docker_yaml"
+
 # 服务列表（按依赖顺序）
 SERVICES=(
     "namespace:namespace.yaml"
@@ -43,10 +47,6 @@ declare -A SERVICE_NAMES=(
     ["nacos"]="Nacos"
     ["services"]="Services"
 )
-
-# 获取脚本目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
 
 # 显示帮助信息
 show_help() {
@@ -88,15 +88,16 @@ show_help() {
 start_service() {
     local service=$1
     local file=$2
+    local full_path="${YAML_DIR}/${file}"
 
     echo -e "${BLUE}[启动] ${SERVICE_NAMES[$service]}...${NC}"
 
-    if [ ! -f "$file" ]; then
-        echo -e "${RED}✗ 文件不存在: $file${NC}"
+    if [ ! -f "$full_path" ]; then
+        echo -e "${RED}✗ 文件不存在: $full_path${NC}"
         return 1
     fi
 
-    kubectl apply -f "$file" > /dev/null 2>&1
+    kubectl apply -f "$full_path" > /dev/null 2>&1
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ ${SERVICE_NAMES[$service]} 已启动${NC}"
@@ -111,15 +112,16 @@ start_service() {
 stop_service() {
     local service=$1
     local file=$2
+    local full_path="${YAML_DIR}/${file}"
 
     echo -e "${BLUE}[停止] ${SERVICE_NAMES[$service]}...${NC}"
 
-    if [ ! -f "$file" ]; then
-        echo -e "${RED}✗ 文件不存在: $file${NC}"
+    if [ ! -f "$full_path" ]; then
+        echo -e "${RED}✗ 文件不存在: $full_path${NC}"
         return 1
     fi
 
-    kubectl delete -f "$file" --ignore-not-found=true > /dev/null 2>&1
+    kubectl delete -f "$full_path" --ignore-not-found=true > /dev/null 2>&1
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ ${SERVICE_NAMES[$service]} 已停止${NC}"
@@ -224,7 +226,7 @@ start_all() {
 
         # 跳过 namespace 和 services（它们不是实际的服务）
         if [ "$service" == "namespace" ]; then
-            kubectl apply -f "$file" > /dev/null 2>&1
+            kubectl apply -f "${YAML_DIR}/${file}" > /dev/null 2>&1
             echo -e "${GREEN}✓ Namespace 已创建${NC}"
             continue
         fi
@@ -240,7 +242,7 @@ start_all() {
     # 最后应用 services
     echo ""
     echo -e "${BLUE}[配置] 服务端口...${NC}"
-    kubectl apply -f services.yaml > /dev/null 2>&1
+    kubectl apply -f "${YAML_DIR}/services.yaml" > /dev/null 2>&1
     echo -e "${GREEN}✓ 服务端口已配置${NC}"
 
     echo ""
@@ -303,6 +305,12 @@ main() {
     # 检查集群连接
     if ! kubectl get nodes &> /dev/null; then
         echo -e "${RED}✗ 无法连接到 Kubernetes 集群${NC}"
+        exit 1
+    fi
+
+    # 检查 YAML 目录
+    if [ ! -d "$YAML_DIR" ]; then
+        echo -e "${RED}✗ YAML 目录不存在: $YAML_DIR${NC}"
         exit 1
     fi
 

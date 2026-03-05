@@ -36,12 +36,22 @@ target_link_libraries(gateway PRIVATE Drogon::Drogon)
 
 # Link protobuf and gRPC for generated stubs used by controllers
 find_package(Protobuf REQUIRED)
+find_package(c-ares CONFIG)
+if(NOT c-ares_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CARES REQUIRED libcares)
+endif()
 find_package(gRPC REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE protobuf::libprotobuf gRPC::grpc++ )
 
 # Link libcurl (used by consul client) and Nacos SDK C++
 find_package(CURL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
+
+# Link spdlog and fmt
+find_package(spdlog REQUIRED)
+find_package(fmt REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE spdlog::spdlog fmt::fmt)
 
 # Nacos SDK C++ typically installs headers to /usr/local/include/nacos and lib to /usr/local/lib
 find_library(NACOSCPP_LIB nacos-cli PATHS /usr/local/lib /usr/lib)
@@ -124,7 +134,8 @@ drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
 
 target_include_directories(${PROJECT_NAME}
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-                                   ${CMAKE_CURRENT_SOURCE_DIR}/models)
+                                   ${CMAKE_CURRENT_SOURCE_DIR}/models
+                                   ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_include_directories(${PROJECT_NAME}
                PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../internal
                    ${CMAKE_CURRENT_SOURCE_DIR}/../logs

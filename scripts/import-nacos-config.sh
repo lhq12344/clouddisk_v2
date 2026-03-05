@@ -59,14 +59,29 @@ fi
 echo ""
 echo -e "${BLUE}正在导入配置...${NC}"
 
-# 使用 Nacos Open API 导入配置
+# 1. 先登录获取 token
+LOGIN_RESPONSE=$(curl -s -X POST "http://${NACOS_SERVER}/nacos/v1/auth/login" \
+  -d "username=${NACOS_USERNAME}" \
+  -d "password=${NACOS_PASSWORD}")
+
+ACCESS_TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+if [ -z "$ACCESS_TOKEN" ]; then
+    echo -e "${RED}✗ 登录失败${NC}"
+    echo "响应: $LOGIN_RESPONSE"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ 登录成功，获取到 token${NC}"
+
+# 2. 使用 token 导入配置
 RESPONSE=$(curl -s -X POST "http://${NACOS_SERVER}/nacos/v1/cs/configs" \
   -d "dataId=${DATA_ID}" \
   -d "group=${GROUP}" \
   -d "tenant=${NAMESPACE_ID}" \
   -d "content=${CONFIG_CONTENT}" \
   -d "type=json" \
-  --user "${NACOS_USERNAME}:${NACOS_PASSWORD}")
+  -H "accessToken: ${ACCESS_TOKEN}")
 
 if [ "$RESPONSE" == "true" ]; then
     echo -e "${GREEN}✓ 配置导入成功！${NC}"

@@ -1,35 +1,39 @@
 {
   "redis": {
-    "host": "172.20.10.3",
+    "host": "127.0.0.1",
     "port": "30379"
   },
   "mysql": {
-    "host": "172.20.10.3",
+    "host": "127.0.0.1",
     "port": "30306",
     "user": "root",
     "password": "123456"
   },
   "consul": {
-    "host": "172.20.10.3",
+    "host": "127.0.0.1",
     "port": "30500",
     "account_srv": {
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 50051
     },
     "file_srv": {
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 50052
     },
     "mcp_srv": {
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 50053
+    },
+    "gateway_srv": {
+      "host": "127.0.0.1",
+      "port": 8080
     }
   },
   "jwt": {
     "signing_key": "clouddisk_v2_secret_key_2025"
   },
   "kafka": {
-    "host": "172.20.10.3",
+    "host": "127.0.0.1",
     "port": "31092"
   },
   "alioss": {
@@ -39,7 +43,7 @@
     "bucket_name": "clouddisk-v2"
   },
   "minio": {
-    "host": "172.20.10.3",
+    "host": "127.0.0.1",
     "port": 30900,
     "accessKey": "minioadmin",
     "secretKey": "minioadmin12345678",

@@ -1,6 +1,7 @@
 #pragma once
 #include <drogon/drogon.h>
 #include <jsoncpp/json/json.h>
+#include <future>
 #include "../logs/Logger.h"
 class ConsulRegister
 {

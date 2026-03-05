@@ -87,7 +87,7 @@ const (
 	DefaultDashScopeBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	DefaultDashScopeModel   = "qwen-plus"
 
-	DefaultMCPSSEURL  = "http://192.168.149.128:18090/mcp/sse"
+	DefaultMCPSSEURL  = "http://127.0.0.1:18090/mcp/sse"
 	MaxToolIterations = 6
 
 	LLMTimeout = 60 * time.Second

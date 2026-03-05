@@ -25,7 +25,7 @@ func main() {
 		cancel()
 	}()
 
-	brokers := []string{"192.168.149.128:31092"}
+	brokers := []string{"127.0.0.1:31092"}
 	mainTopic := "file.upload.cmd"
 	dlqTopic := "file.upload.cmd.dlq"
 	mainGroupID := "store_srv_group"
