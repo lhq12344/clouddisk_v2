@@ -15,15 +15,13 @@ spec:
     spec:
       containers:
         - name: nacos
-          image: nacos/nacos-server:v3.1.0
-          imagePullPolicy: Never
+          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nacos/nacos-server:v3.1.1
+          imagePullPolicy: IfNotPresent
           env:
             - name: MODE
               value: "standalone"
             - name: SPRING_DATASOURCE_PLATFORM
               value: "mysql"
-
-            # 你的 MySQL 配置，根据实际情况修改
             - name: MYSQL_SERVICE_HOST
               value: "mysql-svc.infra.svc"
             - name: MYSQL_SERVICE_PORT
@@ -34,14 +32,10 @@ spec:
               value: "root"
             - name: MYSQL_SERVICE_PASSWORD
               value: "123456"
-
-            # JVM 内存可加可不加（推荐加）
             - name: JVM_XMS
               value: "512m"
             - name: JVM_XMX
               value: "512m"
-
-            ## ===== VERY IMPORTANT =====
             - name: NACOS_AUTH_ENABLE
               value: "true"
             - name: NACOS_AUTH_TOKEN
@@ -50,20 +44,16 @@ spec:
               value: "serverIdentity"
             - name: NACOS_AUTH_IDENTITY_VALUE
               value: "cloudDisk2025"
-
           ports:
             - containerPort: 8848
             - containerPort: 9848
-
           volumeMounts:
             - name: nacos-data
               mountPath: /home/nacos/data
-
       volumes:
         - name: nacos-data
           persistentVolumeClaim:
             claimName: nacos-data
-
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -76,8 +66,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: nfs-storage
-
+  storageClassName: local-path
 ---
 apiVersion: v1
 kind: Service
@@ -90,17 +79,14 @@ spec:
     - name: server
       port: 8848
       targetPort: 8848
-      nodePort: 30848   # 访问：http://nodeIP:30848/nacos
-
+      nodePort: 30848
     - name: console
       port: 8080
       targetPort: 8080
       nodePort: 30880
-
     - name: grpc
       port: 9848
       targetPort: 9848
       nodePort: 31848
-
   selector:
     app: nacos

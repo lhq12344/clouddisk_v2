@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go_test/backword_part/model"
 	"go_test/internal"
@@ -17,6 +18,9 @@ import (
 	"go_test/other_srv/store_srv/localfile"
 	"sync"
 )
+
+// ErrInboxLocked 表示 Inbox 被其他 worker 锁定，不应提交 offset
+var ErrInboxLocked = errors.New("inbox locked by other worker")
 
 type UploadCmdPayload struct {
 	TxID      string `json:"tx_id"`
@@ -74,6 +78,12 @@ func NewFileUploadConsumer(ctx context.Context, workerCount int, dlqProducer *DL
 					if t.session != nil && t.session.Context().Err() == nil {
 						t.session.MarkMessage(t.msg, "")
 					}
+				} else if errors.Is(err, ErrInboxLocked) {
+					// 【修复】Inbox 被锁定：不提交 offset，让 Kafka 重新投递
+					internal.Logger.Debug("[NewFileUploadConsumer]inbox locked, will not commit offset",
+						zap.Int32("partition", t.msg.Partition),
+						zap.Int64("offset", t.msg.Offset))
+					// 不调用 MarkMessage，消息会被重新投递
 				} else {
 					// 重试耗尽或不可重试错误：发送到 DLQ 并提交 offset
 					internal.Logger.Error("[NewFileUploadConsumer]process message failed after retries",
@@ -129,6 +139,13 @@ func (c *FileUploadConsumer) processMessageWithRetry(ctx context.Context, msg *s
 		}
 
 		lastErr = err
+
+		// 【修复】如果是 Inbox 锁定错误，直接返回，不重试
+		if errors.Is(err, ErrInboxLocked) {
+			internal.Logger.Debug("[processMessageWithRetry]Inbox locked, skipping retry",
+				zap.Int64("offset", msg.Offset))
+			return err
+		}
 
 		// 判断是否可重试
 		if !IsRetryableError(err) {
@@ -204,7 +221,8 @@ func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.Con
 		return nil // 已处理过，允许 MarkMessage
 	}
 	if !acquired {
-		return fmt.Errorf("inbox locked by other worker, retry later")
+		// 【修复】锁未过期，返回特殊错误，不提交 offset
+		return ErrInboxLocked
 	}
 
 	// 3) OSS 是否已存在（用 OssKey）

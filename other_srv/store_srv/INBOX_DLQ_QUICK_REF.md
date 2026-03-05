@@ -60,6 +60,46 @@ DLQ Consumer 轮询处理
 
 ### 发送到 DLQ 时更新 Inbox
 
+`kafka/dlq_producer.go:persistToDB()`
+
+```go
+tx.Model(&model.Inbox{}).
+    Where("event_id = ?", dlqMsg.EventID).
+    Updates(map[string]interface{}{
+        "status":        model.InboxDLQ,
+        "dlq_failure_id": record.ID,
+        "locked_by":      "",    // 释放锁
+        "locked_until":   nil,   // 清除锁超时
+    })
+```
+
+### Inbox 锁定机制修复 ⭐ NEW
+
+**问题**: 当 Inbox 被其他 worker 锁定时，原逻辑会提交 offset，导致消息丢失
+
+**修复**: 引入 `ErrInboxLocked` 特殊错误，锁定时不提交 offset
+
+`kafka/kafkacunsumer.go`
+
+```go
+// 定义特殊错误
+var ErrInboxLocked = errors.New("inbox locked by other worker")
+
+// processMessage: 锁定时返回特殊错误
+if !acquired {
+    return ErrInboxLocked  // 不提交 offset
+}
+
+// Worker: 遇到 ErrInboxLocked 不提交 offset
+if errors.Is(err, ErrInboxLocked) {
+    // 不调用 MarkMessage，让 Kafka 重新投递
+} else {
+    session.MarkMessage(msg, "")  // 其他情况提交 offset
+}
+```
+
+详见: `INBOX_LOCK_FIX.md`
+
 **文件：** `kafka/dlq_producer.go`
 
 ```go

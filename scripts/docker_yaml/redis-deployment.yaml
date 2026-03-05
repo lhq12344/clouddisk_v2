@@ -16,7 +16,7 @@ spec:
       containers:
         - name: redis
           image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/opstree/redis:v7.0.5
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           args: ["--appendonly", "yes"]
           ports:
             - containerPort: 6379
@@ -39,4 +39,4 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: nfs-storage
+  storageClassName: local-path

@@ -8,13 +8,25 @@ stringData:
   MINIO_ROOT_USER: "minioadmin"
   MINIO_ROOT_PASSWORD: "minioadmin12345678"
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: infra
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: minio
   namespace: infra
 spec:
-  serviceName: minio
   replicas: 1
   selector:
     matchLabels:
@@ -26,7 +38,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/minio/minio:latest
+          image: minio/minio:latest
           args:
             - server
             - /data
@@ -40,28 +52,13 @@ spec:
               containerPort: 9000
             - name: console
               containerPort: 9001
-          readinessProbe:
-            tcpSocket:
-              port: 9000
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          livenessProbe:
-            tcpSocket:
-              port: 9000
-            initialDelaySeconds: 10
-            periodSeconds: 10
           volumeMounts:
             - name: data
               mountPath: /data
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteMany"]
-        resources:
-          requests:
-            storage: 2Gi
-        storageClassName: nfs-storage
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
 ---
 apiVersion: v1
 kind: Service

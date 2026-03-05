@@ -14,7 +14,7 @@ metadata:
   name: consul
   namespace: infra
 spec:
-  replicas: 3
+  replicas: 1
   serviceName: "consul"
   selector:
     matchLabels:
@@ -33,7 +33,7 @@ spec:
             - "agent"
             - "-server"
             - "-ui"
-            - "-bootstrap-expect=3"
+            - "-bootstrap-expect=1"
             - "-datacenter=dc1"
             - "-node=$(POD_NAME)"
             - "-bind=0.0.0.0"
@@ -62,7 +62,7 @@ spec:
         resources:
           requests:
             storage: 1Gi
-        storageClassName: nfs-storage
+        storageClassName: local-path
 ---
 apiVersion: v1
 kind: ServiceAccount
