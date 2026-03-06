@@ -11,8 +11,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 项目根目录 - 修复为正确路径
+PROJECT_ROOT="/home/lihaoqian/project/clouddisk_v2"
 cd "$PROJECT_ROOT"
 
 # PID 文件目录
@@ -41,7 +41,7 @@ stop_service() {
                 rm -f "$pid_file"
             fi
         else
-            echo -e "${YELLOW}$service_name 未运行${NC}"
+            echo -e "${YELLOW}$service_name 未运行 (清理 PID 文件)${NC}"
             rm -f "$pid_file"
         fi
     else
@@ -70,7 +70,7 @@ stop_nginx() {
             sleep 1
             echo -e "${GREEN}  ✓ OpenResty/Nginx 已停止${NC}"
         else
-            echo -e "${YELLOW}OpenResty/Nginx 未运行${NC}"
+            echo -e "${YELLOW}OpenResty/Nginx 未运行 (清理 PID 文件)${NC}"
         fi
         rm -f "$NGINX_PID_FILE"
     else
@@ -106,7 +106,8 @@ main() {
     echo ""
 
     # 清理 PID 目录
-    if [ -d "$PID_DIR" ]; then
+    if [ -d "$PID_DIR" ] && [ -z "$(ls -A $PID_DIR)" ]; then
+        echo -e "${BLUE}清理空的 PID 目录...${NC}"
         rm -rf "$PID_DIR"
     fi
 }

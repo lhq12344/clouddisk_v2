@@ -337,7 +337,7 @@ func (c *FileUploadConsumer) markInboxDLQ(ctx context.Context, eventID, errMsg s
 			"locked_until": nil,
 			"locked_by":    "",
 			"updated_at":   now,
-		}).Err()
+		}).Error
 }
 
 // 你可以用 mysql driver 的错误码 1062；这里给一个通用兜底

@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"go_test/backword_part/model"
 	"go_test/internal"

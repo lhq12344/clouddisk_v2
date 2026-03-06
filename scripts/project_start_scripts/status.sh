@@ -9,8 +9,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 项目根目录 - 修复为正确路径
+PROJECT_ROOT="/home/lihaoqian/project/clouddisk_v2"
 cd "$PROJECT_ROOT"
 
 # PID 文件目录
@@ -116,8 +116,8 @@ main() {
     echo ""
 
     # 检查常用端口
-    for port in 2024 3000 8080 50051 50052; do
-        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+    for port in 2024 3000 3001 8080 50051 50052; do
+        if netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
             echo -e "${GREEN}  ✓ 端口 $port 正在监听${NC}"
         else
             echo -e "${YELLOW}  ○ 端口 $port 未监听${NC}"

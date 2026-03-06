@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"github.com/IBM/sarama"
+	"gorm.io/gorm"
 )
 
 // DLQManager DLQ 管理服务

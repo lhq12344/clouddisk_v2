@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目根目录
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="/home/lihaoqian/project/clouddisk_v2"
 cd "$PROJECT_ROOT"
 
 # 日志目录
@@ -28,6 +28,71 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 一键启动脚本${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
+
+# 检查基础设施服务
+check_infrastructure() {
+    echo -e "${YELLOW}[0/7] 检查基础设施服务...${NC}"
+
+    INFRA_OK=true
+
+    # 检查 Nacos
+    if no_proxy="*" curl -s http://127.0.0.1:30848/nacos/v1/console/health/liveness > /dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Nacos (127.0.0.1:30848)${NC}"
+    else
+        echo -e "${RED}  ✗ Nacos 未运行 (127.0.0.1:30848)${NC}"
+        INFRA_OK=false
+    fi
+
+    # 检查 Consul
+    if no_proxy="*" curl -s http://127.0.0.1:30500/v1/status/leader > /dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Consul (127.0.0.1:30500)${NC}"
+    else
+        echo -e "${RED}  ✗ Consul 未运行 (127.0.0.1:30500)${NC}"
+        INFRA_OK=false
+    fi
+
+    # 检查 MySQL
+    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/30306" 2>/dev/null; then
+        echo -e "${GREEN}  ✓ MySQL (127.0.0.1:30306)${NC}"
+    else
+        echo -e "${RED}  ✗ MySQL 未运行 (127.0.0.1:30306)${NC}"
+        INFRA_OK=false
+    fi
+
+    # 检查 Redis
+    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/30379" 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Redis (127.0.0.1:30379)${NC}"
+    else
+        echo -e "${RED}  ✗ Redis 未运行 (127.0.0.1:30379)${NC}"
+        INFRA_OK=false
+    fi
+
+    # 检查 Kafka
+    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/31092" 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Kafka (127.0.0.1:31092)${NC}"
+    else
+        echo -e "${RED}  ✗ Kafka 未运行 (127.0.0.1:31092)${NC}"
+        INFRA_OK=false
+    fi
+
+    # 检查 MinIO
+    if no_proxy="*" curl -s http://127.0.0.1:30900 > /dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ MinIO (127.0.0.1:30900)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ MinIO 未运行 (127.0.0.1:30900)${NC}"
+    fi
+
+    if [ "$INFRA_OK" = false ]; then
+        echo ""
+        echo -e "${RED}错误: 部分基础设施服务未运行！${NC}"
+        echo -e "${YELLOW}请先启动 K3s 中的基础设施服务：${NC}"
+        echo -e "  kubectl get pods -n infra"
+        echo ""
+        exit 1
+    fi
+
+    echo ""
+}
 
 # 检查依赖
 check_dependencies() {
@@ -131,9 +196,16 @@ start_cpp_gateway() {
     echo -e "${YELLOW}[3/7] 启动 C++ Gateway...${NC}"
 
     GATEWAY_BIN="$PROJECT_ROOT/forward_part/gateway/build/gateway"
+    GATEWAY_CONFIG="$PROJECT_ROOT/forward_part/gateway/config.json"
 
     if [ ! -f "$GATEWAY_BIN" ]; then
         echo -e "${RED}  ✗ 未找到 Gateway 二进制文件${NC}"
+        echo ""
+        return
+    fi
+
+    if [ ! -f "$GATEWAY_CONFIG" ]; then
+        echo -e "${RED}  ✗ 未找到 Gateway 配置文件: $GATEWAY_CONFIG${NC}"
         echo ""
         return
     fi
@@ -144,10 +216,15 @@ start_cpp_gateway() {
     GATEWAY_PID=$!
     echo $GATEWAY_PID > "$PID_DIR/gateway.pid"
 
-    sleep 1
+    sleep 2
 
     if ps -p $GATEWAY_PID > /dev/null; then
         echo -e "${GREEN}  ✓ C++ Gateway 已启动 (PID: $GATEWAY_PID)${NC}"
+        # 获取实际监听的端口
+        GATEWAY_PORT=$(lsof -i -P -n | grep $GATEWAY_PID | grep LISTEN | awk '{print $9}' | cut -d: -f2 | head -1)
+        if [ ! -z "$GATEWAY_PORT" ]; then
+            echo -e "${GREEN}    监听端口: $GATEWAY_PORT${NC}"
+        fi
     else
         echo -e "${RED}  ✗ C++ Gateway 启动失败，查看日志: $LOG_DIR/gateway.log${NC}"
     fi
@@ -292,8 +369,25 @@ show_info() {
     echo -e "${BLUE}  访问地址:${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "${GREEN}  前端:     http://localhost:3000${NC}"
-    echo -e "${GREEN}  网关:     http://localhost:8080${NC}"
+
+    # 获取 Gateway 实际端口
+    GATEWAY_PID_FILE="$PID_DIR/gateway.pid"
+    if [ -f "$GATEWAY_PID_FILE" ]; then
+        GATEWAY_PID=$(cat "$GATEWAY_PID_FILE")
+        GATEWAY_PORT=$(lsof -i -P -n 2>/dev/null | grep $GATEWAY_PID | grep LISTEN | awk '{print $9}' | cut -d: -f2 | head -1)
+        if [ ! -z "$GATEWAY_PORT" ]; then
+            echo -e "${GREEN}  网关:     http://172.20.10.3:$GATEWAY_PORT${NC}"
+        else
+            echo -e "${GREEN}  网关:     (动态端口，查看日志)${NC}"
+        fi
+    fi
+
     echo -e "${GREEN}  反向代理: http://localhost:2024${NC}"
+    echo ""
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}  Consul 服务发现:${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${GREEN}  http://127.0.0.1:30500/ui${NC}"
     echo ""
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}  日志文件:${NC}"
@@ -305,14 +399,21 @@ show_info() {
     echo -e "  $LOG_DIR/frontend.log"
     echo ""
     echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}  实时查看日志:${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "  tail -f $LOG_DIR/*.log"
+    echo ""
+    echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}  停止所有服务:${NC}"
     echo -e "${BLUE}========================================${NC}"
+    echo -e "  cd $PROJECT_ROOT/scripts/project_start_scripts"
     echo -e "  ./stop_all.sh"
     echo ""
 }
 
 # 主流程
 main() {
+    check_infrastructure
     check_dependencies
     start_nginx
     start_cpp_gateway

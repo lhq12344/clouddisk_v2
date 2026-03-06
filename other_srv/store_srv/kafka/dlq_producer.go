@@ -11,6 +11,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // DLQProducer 死信队列生产者
