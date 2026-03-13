@@ -60,10 +60,10 @@ check_infrastructure() {
     fi
 
     # 检查 Redis
-    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/30379" 2>/dev/null; then
-        echo -e "${GREEN}  ✓ Redis (127.0.0.1:30379)${NC}"
+    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/31029" 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Redis (127.0.0.1:31029)${NC}"
     else
-        echo -e "${RED}  ✗ Redis 未运行 (127.0.0.1:30379)${NC}"
+        echo -e "${RED}  ✗ Redis 未运行 (127.0.0.1:31029)${NC}"
         INFRA_OK=false
     fi
 

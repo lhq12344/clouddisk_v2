@@ -37,12 +37,14 @@ DLQ (file.upload.cmd.dlq)
 ### 1. 重试机制
 
 **配置：**
+
 - 最大重试次数：3 次
 - 初始退避时间：1 秒
 - 最大退避时间：30 秒
 - 退避倍数：2.0（指数退避）
 
 **退避时间计算：**
+
 - 第 1 次重试：1 秒
 - 第 2 次重试：2 秒
 - 第 3 次重试：4 秒
@@ -50,6 +52,7 @@ DLQ (file.upload.cmd.dlq)
 ### 2. 错误分类
 
 **可重试错误（Retryable）：**
+
 - 网络超时
 - 服务不可用
 - 限流错误
@@ -57,6 +60,7 @@ DLQ (file.upload.cmd.dlq)
 - OSS 连接超时
 
 **不可重试错误（Non-Retryable）：**
+
 - 无效文件格式
 - 文件未找到
 - 认证失败
@@ -68,11 +72,13 @@ DLQ (file.upload.cmd.dlq)
 ### 3. DLQ Producer
 
 **功能：**
+
 - 发送失败消息到 DLQ topic
 - 记录失败元数据（原因、次数、堆栈等）
 - 持久化到 MySQL
 
 **消息结构：**
+
 ```json
 {
   "original_topic": "file.upload.cmd",
@@ -96,12 +102,14 @@ DLQ (file.upload.cmd.dlq)
 ### 4. DLQ Consumer
 
 **特点：**
+
 - 低频轮询（默认 5 分钟）
 - 批量处理（每次 10 条）
 - 自动重试（最多 1 次）
 - 失败告警
 
 **处理流程：**
+
 1. 从 MySQL 查询 `status=pending` 的消息
 2. 更新状态为 `retrying`
 3. 重新处理消息
@@ -111,6 +119,7 @@ DLQ (file.upload.cmd.dlq)
 ### 5. DLQ Manager
 
 **管理 API：**
+
 - `ListDLQMessages` - 查询 DLQ 消息列表
 - `GetDLQMessage` - 获取单个消息详情
 - `RetryMessage` - 手动重试单条消息
@@ -125,30 +134,31 @@ DLQ (file.upload.cmd.dlq)
 
 ### dlq_failures 表
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | BIGINT | 主键 |
-| topic | VARCHAR(255) | 原始 topic |
-| partition | INT | 原始分区 |
-| offset | BIGINT | 原始 offset |
-| user_id | VARCHAR(64) | 用户 ID |
-| object_key | VARCHAR(512) | OSS 对象键 |
-| file_hash | VARCHAR(128) | 文件哈希 |
-| event_id | VARCHAR(64) | 事件 ID |
-| original_key | VARCHAR(255) | 原始消息 key |
-| original_value | MEDIUMBLOB | 原始消息内容 |
-| failure_reason | TEXT | 失败原因 |
-| failure_count | INT | 失败次数 |
-| error_category | VARCHAR(32) | 错误类型 |
-| error_stack | TEXT | 错误堆栈 |
-| first_failed_at | TIMESTAMP | 首次失败时间 |
-| last_failed_at | TIMESTAMP | 最后失败时间 |
-| status | VARCHAR(16) | 状态 |
-| resolved_at | TIMESTAMP | 解决时间 |
-| resolved_by | VARCHAR(128) | 解决人/系统 |
-| resolution | TEXT | 解决方案说明 |
+| 字段            | 类型         | 说明         |
+| --------------- | ------------ | ------------ |
+| id              | BIGINT       | 主键         |
+| topic           | VARCHAR(255) | 原始 topic   |
+| partition       | INT          | 原始分区     |
+| offset          | BIGINT       | 原始 offset  |
+| user_id         | VARCHAR(64)  | 用户 ID      |
+| object_key      | VARCHAR(512) | OSS 对象键   |
+| file_hash       | VARCHAR(128) | 文件哈希     |
+| event_id        | VARCHAR(64)  | 事件 ID      |
+| original_key    | VARCHAR(255) | 原始消息 key |
+| original_value  | MEDIUMBLOB   | 原始消息内容 |
+| failure_reason  | TEXT         | 失败原因     |
+| failure_count   | INT          | 失败次数     |
+| error_category  | VARCHAR(32)  | 错误类型     |
+| error_stack     | TEXT         | 错误堆栈     |
+| first_failed_at | TIMESTAMP    | 首次失败时间 |
+| last_failed_at  | TIMESTAMP    | 最后失败时间 |
+| status          | VARCHAR(16)  | 状态         |
+| resolved_at     | TIMESTAMP    | 解决时间     |
+| resolved_by     | VARCHAR(128) | 解决人/系统  |
+| resolution      | TEXT         | 解决方案说明 |
 
 **状态枚举：**
+
 - `pending` - 待处理
 - `retrying` - 重试中
 - `failed` - 最终失败
@@ -168,7 +178,7 @@ mysql -u root -p clouddisk < scripts/dlq_migration.sql
 
 ```bash
 kafka-topics.sh --create \
-  --bootstrap-server 192.168.149.128:31092 \
+  --bootstrap-server localhost:31092 \
   --topic file.upload.cmd.dlq \
   --partitions 3 \
   --replication-factor 1
@@ -182,6 +192,7 @@ go run main.go
 ```
 
 **日志输出：**
+
 ```
 DLQ producer created successfully
 Main consumer created successfully
@@ -194,6 +205,7 @@ Main topic: file.upload.cmd, DLQ topic: file.upload.cmd.dlq
 ### 4. 查询 DLQ 消息
 
 **查询所有待处理消息：**
+
 ```go
 filter := kafka.DLQFilter{
     Status: &model.DLQStatusPending,
@@ -203,6 +215,7 @@ messages, total, err := dlqManager.ListDLQMessages(ctx, filter)
 ```
 
 **按用户查询：**
+
 ```go
 userID := "1001"
 filter := kafka.DLQFilter{
@@ -213,6 +226,7 @@ messages, total, err := dlqManager.ListDLQMessages(ctx, filter)
 ```
 
 **按错误类型查询：**
+
 ```go
 errorCategory := "retryable"
 filter := kafka.DLQFilter{
@@ -225,11 +239,13 @@ messages, total, err := dlqManager.ListDLQMessages(ctx, filter)
 ### 5. 手动重试消息
 
 **重试单条消息：**
+
 ```go
 err := dlqManager.RetryMessage(ctx, messageID)
 ```
 
 **批量重试：**
+
 ```go
 ids := []uint{1, 2, 3, 4, 5}
 successCount, failCount, err := dlqManager.RetryBatch(ctx, ids)
@@ -261,6 +277,7 @@ fmt.Printf("Statistics: %+v\n", stats)
 ```
 
 **输出示例：**
+
 ```json
 {
   "by_status": {
@@ -288,6 +305,7 @@ fmt.Printf("DLQ Metrics: %+v\n", metrics)
 ```
 
 **输出示例：**
+
 ```json
 {
   "dlq_message_count": 122,
@@ -317,12 +335,14 @@ fmt.Printf("DLQ Metrics: %+v\n", metrics)
 ### 告警规则
 
 **告警条件：**
+
 - DLQ 消息总数 > 100
 - DLQ 增长率 > 10 msg/min
 - 错误率 > 5%
 - 待处理消息数 > 50
 
 **告警级别：**
+
 - **Warning** - DLQ 消息数超过阈值
 - **Critical** - DLQ 消息最终失败（`status=failed`）
 
@@ -401,11 +421,13 @@ deleted, err := dlqManager.CleanupOldMessages(ctx, 30)
 ### 问题 1：DLQ 消息持续增长
 
 **原因：**
+
 - 下游服务（OSS）不可用
 - 网络问题
 - 配置错误
 
 **解决：**
+
 1. 检查 OSS 服务状态
 2. 检查网络连接
 3. 查看错误日志，定位具体原因
@@ -413,11 +435,13 @@ deleted, err := dlqManager.CleanupOldMessages(ctx, 30)
 ### 问题 2：DLQ Consumer 不工作
 
 **原因：**
+
 - DLQ topic 不存在
 - 消费者配置错误
 - 数据库连接失败
 
 **解决：**
+
 1. 检查 Kafka topic 是否存在
 2. 检查配置文件
 3. 检查数据库连接
@@ -425,10 +449,12 @@ deleted, err := dlqManager.CleanupOldMessages(ctx, 30)
 ### 问题 3：消息重复处理
 
 **原因：**
+
 - Inbox 幂等性失效
 - 事务未正确提交
 
 **解决：**
+
 1. 检查 Inbox 表的唯一索引
 2. 确保事务正确提交
 3. 检查锁超时时间

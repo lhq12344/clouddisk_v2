@@ -13,7 +13,7 @@
 | Nacos | 30848 | 配置中心 (Console: 8080) |
 | Consul | 30500 | 服务发现 |
 | MySQL | 30306 | 数据库 |
-| Redis | 30379 | 缓存 |
+| Redis | 31029 | 缓存 |
 | Kafka | 31092 | 消息队列 |
 | MinIO API | 30900 | 对象存储 |
 | MinIO Console | 30901 | MinIO 管理界面 |

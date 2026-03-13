@@ -20,7 +20,7 @@ spec:
   type: NodePort
   ports:
     - port: 6379
-      nodePort: 30379
+      nodePort: 31029
   selector:
     app: redis
 ---

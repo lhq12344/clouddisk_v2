@@ -13,7 +13,7 @@
 {
   "redis": {
     "host": "172.20.10.3",      // Redis 主机地址
-    "port": "30379"              // Redis 端口
+    "port": "31029"              // Redis 端口
   },
   "mysql": {
     "host": "172.20.10.3",      // MySQL 主机地址
@@ -66,11 +66,11 @@
 ```json
 "redis": {
   "host": "172.20.10.3",
-  "port": "30379"
+  "port": "31029"
 }
 ```
 - **用途**: 缓存、会话存储
-- **测试连接**: `redis-cli -h 172.20.10.3 -p 30379 ping`
+- **测试连接**: `redis-cli -h 172.20.10.3 -p 31029 ping`
 
 ### 2. MySQL 配置
 ```json
@@ -241,7 +241,7 @@ clientConfig := constant.ClientConfig{
 
 ```bash
 # 测试 Redis
-redis-cli -h 172.20.10.3 -p 30379 ping
+redis-cli -h 172.20.10.3 -p 31029 ping
 
 # 测试 MySQL
 mysql -h 172.20.10.3 -P 30306 -uroot -p123456 -e "SHOW DATABASES;"
@@ -345,7 +345,7 @@ curl http://172.20.10.3:30848/nacos/v1/console/health/readiness
 
 # 测试连接
 mysql -h 172.20.10.3 -P 30306 -uroot -p123456
-redis-cli -h 172.20.10.3 -p 30379 ping
+redis-cli -h 172.20.10.3 -p 31029 ping
 ```
 
 ## 十、配置模板

@@ -16,7 +16,7 @@ import (
 )
 
 type MinioConf struct {
-	Host      string `mapstructure:"host"` // 例如：minio-nodeport.infra:9000 或 192.168.149.128:30900
+	Host      string `mapstructure:"host"` // 例如：minio-nodeport.infra:9000 或 localhost:30900
 	Port      int    `mapstructure:"port"`
 	AccessKey string `mapstructure:"accessKey"`   // MinIO AccessKey
 	SecretKey string `mapstructure:"secretKey"`   // MinIO SecretKey

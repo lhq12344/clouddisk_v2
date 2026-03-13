@@ -174,7 +174,7 @@ show_status() {
         echo "MinIO Console: http://${LOCAL_IP}:30901"
         echo "Consul UI:     http://${LOCAL_IP}:30500"
         echo "MySQL:         ${LOCAL_IP}:30306"
-        echo "Redis:         ${LOCAL_IP}:30379"
+        echo "Redis:         ${LOCAL_IP}:31029"
         echo "Kafka:         ${LOCAL_IP}:31092"
         echo ""
     else
