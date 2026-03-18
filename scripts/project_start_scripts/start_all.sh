@@ -86,7 +86,14 @@ check_infrastructure() {
         echo ""
         echo -e "${RED}错误: 部分基础设施服务未运行！${NC}"
         echo -e "${YELLOW}请先启动 K3s 中的基础设施服务：${NC}"
-        echo -e "  kubectl get pods -n infra"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy mysql"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy redis"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy minio"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy consul"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy zookeeper"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy kafka"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy nacos"
+        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh status clouddisk_v2"
         echo ""
         exit 1
     fi
