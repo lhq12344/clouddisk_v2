@@ -7,8 +7,8 @@ import (
 	"go_test/internal"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/IBM/sarama"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -124,7 +124,7 @@ func (m *DLQManager) RetryMessage(ctx context.Context, id uint) error {
 	}
 
 	// 处理消息
-	err := m.processor.processMessage(ctx, msg)
+	err := m.processor.processDLQMessage(ctx, msg)
 
 	if err == nil {
 		// 成功：标记为 resolved，同时更新 Inbox

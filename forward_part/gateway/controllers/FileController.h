@@ -1,6 +1,7 @@
 #pragma once
 
 #include <drogon/HttpController.h>
+#include <drogon/RequestStream.h>
 #include "../../../proto/file_srv/file.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include "../ArcCache/ArcCache.h"
@@ -32,6 +33,7 @@ public:
 	ADD_METHOD_TO(FileController::Showfile, "/file/showfile", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::DeleteFile, "/file/delete", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Initupload, "/file/initupload", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::PresignParts, "/file/PresignParts", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::Uploadpart, "/file/uploadpart", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::CompleteMultipart, "/file/CompleteMultipart", Post, "jwt_decode");
 	ADD_METHOD_TO(FileController::AbortMultipart, "/file/AbortMultipart", Post, "jwt_decode");
@@ -43,11 +45,14 @@ public:
 	void filedowm(const HttpRequestPtr &req,
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void LoadFile(const HttpRequestPtr &req,
+				  RequestStreamPtr &&streamCtx,
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void Showfile(const HttpRequestPtr &req,
 				  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void Initupload(const HttpRequestPtr &req,
 					std::function<void(const HttpResponsePtr &)> &&callback) const;
+	void PresignParts(const HttpRequestPtr &req,
+					  std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void Uploadpart(const HttpRequestPtr &req,
 					std::function<void(const HttpResponsePtr &)> &&callback) const;
 	void CompleteMultipart(const HttpRequestPtr &req,

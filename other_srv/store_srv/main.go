@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"go_test/backword_part/model"
+	"go_test/internal"
 	"go_test/other_srv/store_srv/kafka"
 	"log"
 	"os"
@@ -25,9 +27,9 @@ func main() {
 		cancel()
 	}()
 
-	brokers := []string{"127.0.0.1:31092"}
-	mainTopic := "file.upload.cmd"
-	dlqTopic := "file.upload.cmd.dlq"
+	brokers := []string{internal.ViperConf.KafkaConfig.Host + ":" + internal.ViperConf.KafkaConfig.Port}
+	mainTopic := model.FileUploadEventTopic
+	dlqTopic := model.FileUploadEventTopic + ".dlq"
 	mainGroupID := "store_srv_group"
 	dlqGroupID := "store_srv_dlq_group"
 
@@ -147,4 +149,3 @@ func main() {
 
 	log.Println("Store service stopped gracefully")
 }
-

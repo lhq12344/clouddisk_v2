@@ -7,15 +7,21 @@ import (
 )
 
 const (
-	FilePending = "pending"
-	FileSuccess = "success"
+	FilePendingScan = "pending_scan"
+	FileSuccess     = "success"
+	FileInfected    = "infected"
+	FileScanFailed  = "scan_failed"
 )
 
 type File struct {
 	gorm.Model
-	Sha1   string `gorm:"type:varchar(64);not null;uniqueIndex"`
-	Size   int64  `gorm:"type:bigint"`
-	Status string `gorm:"type:text"`
+	Sha1        string     `gorm:"type:varchar(64);not null;uniqueIndex"` // 历史字段名，当前实际保存 SHA-256 内容哈希
+	Size        int64      `gorm:"type:bigint"`
+	Status      string     `gorm:"type:varchar(32);index"`
+	ObjectKey   string     `gorm:"type:varchar(512);index"`
+	ContentType string     `gorm:"type:varchar(255)"`
+	ScanDetail  string     `gorm:"type:text"`
+	ScannedAt   *time.Time `gorm:"index"`
 }
 
 // UserFile 用户文件关系表（谁拥有这个文件）
@@ -38,30 +44,32 @@ const (
 	OutboxFailed  OutboxStatus = "FAILED"
 )
 const (
-	LoadFile     = "LoadFile"
-	DownLoadFile = "DownLoadFile"
+	LoadFile             = "LoadFile"
+	DownLoadFile         = "DownLoadFile"
+	FileScanRequested    = "FILE_SCAN_REQUESTED"
+	FileUploadEventTopic = "file.upload.cmd"
 )
 
 type DownloadCmdPayload struct {
 	TxID      string `json:"tx_id"`
 	EventID   string `json:"event_id"`
 	FileID    uint   `json:"file_id"`
-	Sha1      string `json:"sha1"`
+	Sha1      string `json:"sha1"` // 历史命名，语义上为 SHA-256 内容哈希
 	Size      int32  `json:"size"`
 	OssKey    string `json:"oss_key"`
 	Type      string `json:"type"`
 	EventType string `json:"event_type"`
 }
-type UploadCmdPayload struct {
-	TxID      string `json:"tx_id"`
-	EventID   string `json:"event_id"`
-	FileID    uint   `json:"file_id"`
-	Sha1      string `json:"sha1"`
-	Size      int32  `json:"size"`
-	OssKey    string `json:"oss_key"`
-	Content   string `json:"content"`
-	Type      string `json:"type"`
-	EventType string `json:"event_type"`
+type FileEventPayload struct {
+	TxID        string `json:"tx_id"`
+	EventID     string `json:"event_id"`
+	FileID      uint   `json:"file_id"`
+	UserID      string `json:"user_id"`
+	Sha1        string `json:"sha1"` // 历史命名，语义上为 SHA-256 内容哈希
+	Size        int64  `json:"size"`
+	OssKey      string `json:"oss_key"`
+	ContentType string `json:"content_type"`
+	EventType   string `json:"event_type"`
 }
 type Outbox struct {
 	gorm.Model
@@ -90,14 +98,14 @@ const (
 )
 
 type Inbox struct {
-	EventID     string      `gorm:"type:varchar(64);primaryKey;comment:幂等键(来自outbox.event_id)"`
-	Status      InboxStatus `gorm:"type:varchar(16);not null;index"`
-	LockedBy    string      `gorm:"type:varchar(64);index"`
-	LockedUntil *time.Time  `gorm:"index"`
-	Attempts    int         `gorm:"not null;default:0"`
-	LastError   string      `gorm:"type:text"`
-	DLQFailureID *uint      `gorm:"index;comment:关联的DLQ失败记录ID"` // 新增：关联 DLQ
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Messages    string       `gorm:"type:varchar(128);default:null"`
+	EventID      string      `gorm:"type:varchar(64);primaryKey;comment:幂等键(来自outbox.event_id)"`
+	Status       InboxStatus `gorm:"type:varchar(16);not null;index"`
+	LockedBy     string      `gorm:"type:varchar(64);index"`
+	LockedUntil  *time.Time  `gorm:"index"`
+	Attempts     int         `gorm:"not null;default:0"`
+	LastError    string      `gorm:"type:text"`
+	DLQFailureID *uint       `gorm:"index;comment:关联的DLQ失败记录ID"` // 新增：关联 DLQ
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Messages     string `gorm:"type:varchar(128);default:null"`
 }

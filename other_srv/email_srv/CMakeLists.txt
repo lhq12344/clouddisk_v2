@@ -23,11 +23,13 @@ target_include_directories(${PROJECT_NAME}
 
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(fmt REQUIRED)
 
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
         CURL::libcurl
         Threads::Threads
+        fmt::fmt
 )
 
 # librdkafka (Kafka consumer)

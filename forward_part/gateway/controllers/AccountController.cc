@@ -1,7 +1,9 @@
 #include "AccountController.h"
+#include "GrpcHttp.h"
 #include "../../../other_srv/email_srv/KafkaProducer.h"
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <vector>
 #include <jwt-cpp/jwt.h>
 #include <jwt-cpp/traits/nlohmann-json/traits.h>
@@ -21,6 +23,13 @@ namespace
 {
 	const std::string kJwtBlacklistKey = "jwt:blacklist";
 	const std::string kJwtWhitelistPrefix = "jwt:whitelist:user:";
+
+	bool parseJsonString(const std::string &s, Json::Value &out, std::string &errs)
+	{
+		Json::CharReaderBuilder b;
+		std::unique_ptr<Json::CharReader> reader(b.newCharReader());
+		return reader->parse(s.data(), s.data() + s.size(), &out, &errs);
+	}
 
 	long long currentUnixSeconds()
 	{
@@ -216,6 +225,17 @@ void AccountController::signup(const drogon::HttpRequestPtr &req,
 	stub->async()->Signup(context.get(), request.get(), response.get(),
 						  [callback, context, request, response, rid](::grpc::Status s)
 						  {
+							  if (response == nullptr)
+							  {
+								  callback(transError("error", "empty grpc response", k502BadGateway));
+								  return;
+							  }
+							  if (!s.ok())
+							  {
+								  LOG_ERROR_RID(rid, "[signup] gRPC Signup failed: {} {}", (int)s.error_code(), s.error_message());
+								  callback(grpcErrorResponse(s));
+								  return;
+							  }
 							  if (s.ok() && response->code() == 0)
 							  {
 								  Json::Value ret;
@@ -223,17 +243,9 @@ void AccountController::signup(const drogon::HttpRequestPtr &req,
 								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
 								  callback(resp);
 								  LOG_INFO_RID(rid, "[signup] user:{}   user registering", request->username());
+								  return;
 							  }
-							  else
-							  {
-								  LOG_ERROR_RID(rid, "[signup] gRPC Signup failed: {} {}", (int)s.error_code(), s.error_message());
-								  Json::Value ret;
-								  ret["error"] = s.error_code();
-								  ret["details"] = s.error_message();
-								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-								  resp->setStatusCode(k500InternalServerError);
-								  callback(resp);
-							  } });
+							  callback(transError("error", response->message(), k400BadRequest)); });
 };
 
 void AccountController::signin(const drogon::HttpRequestPtr &req,
@@ -275,6 +287,17 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 	stub->async()->Signin(context.get(), request.get(), response.get(),
 						  [callback, context, request, response, rid](::grpc::Status s)
 						  {
+							  if (response == nullptr)
+							  {
+								  callback(transError("error", "empty grpc response", k502BadGateway));
+								  return;
+							  }
+							  if (!s.ok())
+							  {
+								  LOG_ERROR_RID(rid, "[signin] gRPC Signin failed: {} {}", (int)s.error_code(), s.error_message());
+								  callback(grpcErrorResponse(s));
+								  return;
+							  }
 							  if (s.ok() && response->code() == 0)
 							  {
 								  Json::Value ret;
@@ -297,10 +320,10 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 									  callback(resp);
 									  return;
 								  }
-								  addTokenToWhitelist(
-									  redisClient,
-									  userId,
-									  token,
+							  addTokenToWhitelist(
+								  redisClient,
+								  userId,
+								  token,
 									  [callback, ret]()
 									  {
 										  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
@@ -312,17 +335,9 @@ void AccountController::signin(const drogon::HttpRequestPtr &req,
 										  callback(resp);
 									  });
 								  LOG_INFO_RID(rid, "[signin] user:{}   user registering", request->username());
+								  return;
 							  }
-							  else
-							  {
-								  LOG_ERROR_RID(rid, "[signin] gRPC Signin failed: {} {}", (int)s.error_code(), s.error_message());
-								  Json::Value ret;
-								  ret["error"] = s.error_code();
-								  ret["details"] = s.error_message();
-								  auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-								  resp->setStatusCode(k500InternalServerError);
-								  callback(resp);
-							  } });
+							  callback(transError("error", response->message(), k401Unauthorized)); });
 }
 
 void AccountController::userinfo(const HttpRequestPtr &req,
@@ -366,26 +381,45 @@ void AccountController::userinfo(const HttpRequestPtr &req,
 	request->set_id(userId);
 	context->AddMetadata("x-request-id", rid);
 	stub->async()->Userinfo(context.get(), request.get(), response.get(),
-							[callback, context, request, response, rid](::grpc::Status s)
-							{
-							if (s.ok() && response->code() == 0)
-							{
-								Json::Value ret;
-								ret["status"] = "ok";
-								ret["message"] = response->message();
-								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-								callback(resp);
-								LOG_INFO_RID(rid, "[userinfo] user:{}   user info", request->username());
-							}
-							else{
-								LOG_ERROR_RID(rid, "[userinfo] gRPC Userinfo failed: {} {}", (int)s.error_code(), s.error_message());
-								Json::Value ret;
-								ret["error"] = s.error_code();
-								ret["details"] = s.error_message();
-								auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-								resp->setStatusCode(k500InternalServerError);
-								callback(resp);
-							} });
+								[callback, context, request, response, rid](::grpc::Status s)
+								{
+								if (response == nullptr)
+								{
+									callback(transError("error", "empty grpc response", k502BadGateway));
+									return;
+								}
+								if (!s.ok())
+								{
+									LOG_ERROR_RID(rid, "[userinfo] gRPC Userinfo failed: {} {}", (int)s.error_code(), s.error_message());
+									callback(grpcErrorResponse(s));
+									return;
+								}
+								if (s.ok() && response->code() == 0)
+								{
+									Json::Value payload;
+									std::string errs;
+									if (!parseJsonString(response->message(), payload, errs) || !payload.isObject())
+									{
+										auto resp = transError("error", "invalid_userinfo_payload", k502BadGateway);
+										callback(resp);
+										return;
+									}
+
+									Json::Value ret;
+									ret["username"] = payload.isMember("username") ? payload["username"] : payload["name"];
+									ret["email"] = payload.get("email", "");
+									ret["name"] = payload.get("name", ret["username"]);
+									ret["gender"] = payload.get("gender", "");
+									ret["mobile"] = payload.isMember("mobile") ? payload["mobile"] : payload.get("Mobile", "");
+									ret["createdAt"] = payload.get("createdAt", "");
+									ret["updatedAt"] = payload.get("updatedAt", "");
+									auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
+									callback(resp);
+									LOG_INFO_RID(rid, "[userinfo] user:{}   user info", request->username());
+								}
+								else{
+									callback(transError("error", response->message(), k404NotFound));
+								} });
 }
 
 void AccountController::sendcode(const HttpRequestPtr &req,

@@ -1,4 +1,5 @@
 #include "AIController.h"
+#include "GrpcHttp.h"
 #include <json/json.h>
 
 // 解析 JSON 字符串
@@ -140,14 +141,19 @@ void AIController::aiRequest(const HttpRequestPtr &req,
 							 [context, request, response, callback](::grpc::Status status)
 							 {
 								 // 5.1 gRPC 层失败
-								 if (!status.ok() || response == nullptr)
+								 if (response == nullptr)
 								 {
 									 Json::Value ret;
 									 ret["error"] = "grpc_error";
-									 ret["details"] = status.error_message();
+									 ret["details"] = "empty grpc response";
 									 auto resp = drogon::HttpResponse::newHttpJsonResponse(ret);
-									 resp->setStatusCode(drogon::k500InternalServerError);
+									 resp->setStatusCode(drogon::k502BadGateway);
 									 callback(resp);
+									 return;
+								 }
+								 if (!status.ok())
+								 {
+									 callback(grpcErrorResponse(status));
 									 return;
 								 }
 

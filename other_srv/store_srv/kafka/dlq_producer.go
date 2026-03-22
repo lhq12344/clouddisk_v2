@@ -16,9 +16,9 @@ import (
 
 // DLQProducer 死信队列生产者
 type DLQProducer struct {
-	producer  sarama.SyncProducer
-	dlqTopic  string
-	logger    *zap.Logger
+	producer sarama.SyncProducer
+	dlqTopic string
+	logger   *zap.Logger
 }
 
 // NewDLQProducer 创建 DLQ 生产者
@@ -43,11 +43,11 @@ func NewDLQProducer(brokers []string, dlqTopic string) (*DLQProducer, error) {
 
 // DLQMessage DLQ 消息结构
 type DLQMessage struct {
-	OriginalTopic     string    `json:"original_topic"`
-	OriginalPartition int32     `json:"original_partition"`
-	OriginalOffset    int64     `json:"original_offset"`
-	OriginalKey       string    `json:"original_key"`
-	OriginalValue     []byte    `json:"original_value"`
+	OriginalTopic     string `json:"original_topic"`
+	OriginalPartition int32  `json:"original_partition"`
+	OriginalOffset    int64  `json:"original_offset"`
+	OriginalKey       string `json:"original_key"`
+	OriginalValue     []byte `json:"original_value"`
 
 	// 失败信息
 	FailureReason string    `json:"failure_reason"`
@@ -69,7 +69,7 @@ func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage
 	now := time.Now()
 
 	// 解析原始消息获取业务字段
-	var payload UploadCmdPayload
+	var payload model.FileEventPayload
 	_ = json.Unmarshal(msg.Value, &payload)
 
 	// 构建 DLQ 消息
@@ -87,7 +87,7 @@ func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage
 		FirstFailedAt: now,
 		LastFailedAt:  now,
 
-		UserID:    payload.TxID,
+		UserID:    payload.UserID,
 		FileHash:  payload.Sha1,
 		ObjectKey: payload.OssKey,
 		EventID:   payload.EventID,
@@ -178,8 +178,8 @@ func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error
 					"status":         model.InboxDLQ,
 					"last_error":     dlqMsg.FailureReason,
 					"dlq_failure_id": record.ID,
-					"locked_by":      "",        // 释放锁
-					"locked_until":   nil,       // 清除锁超时
+					"locked_by":      "",  // 释放锁
+					"locked_until":   nil, // 清除锁超时
 					"updated_at":     time.Now(),
 				}).Error
 
@@ -198,7 +198,6 @@ func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error
 		return nil
 	})
 }
-
 
 // Close 关闭生产者
 func (p *DLQProducer) Close() error {

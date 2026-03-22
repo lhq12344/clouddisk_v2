@@ -17,6 +17,9 @@ cd "$PROJECT_ROOT"
 
 # PID 文件目录
 PID_DIR="$PROJECT_ROOT/.pids"
+NGINX_MODE_FILE="$PID_DIR/nginx.mode"
+DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
+CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 停止所有服务${NC}"
@@ -53,6 +56,18 @@ stop_service() {
 stop_nginx() {
     NGINX_PID_FILE="$PROJECT_ROOT/forward_part/config/nginx/nginx.pid"
 
+    if [ -f "$NGINX_MODE_FILE" ] && [ "$(cat "$NGINX_MODE_FILE" 2>/dev/null)" = "docker" ]; then
+        if command -v docker &> /dev/null && docker inspect "$DOCKER_OPENRESTY_CONTAINER" > /dev/null 2>&1; then
+            echo -e "${YELLOW}停止 OpenResty/Nginx Docker 容器 (${DOCKER_OPENRESTY_CONTAINER})...${NC}"
+            docker rm -f "$DOCKER_OPENRESTY_CONTAINER" > /dev/null 2>&1 || true
+            echo -e "${GREEN}  ✓ OpenResty/Nginx Docker 容器已停止${NC}"
+        else
+            echo -e "${YELLOW}OpenResty/Nginx Docker 容器未运行${NC}"
+        fi
+        rm -f "$NGINX_MODE_FILE" "$NGINX_PID_FILE"
+        return
+    fi
+
     if [ -f "$NGINX_PID_FILE" ]; then
         NGINX_PID=$(cat "$NGINX_PID_FILE")
         if ps -p $NGINX_PID > /dev/null 2>&1; then
@@ -72,7 +87,7 @@ stop_nginx() {
         else
             echo -e "${YELLOW}OpenResty/Nginx 未运行 (清理 PID 文件)${NC}"
         fi
-        rm -f "$NGINX_PID_FILE"
+        rm -f "$NGINX_PID_FILE" "$NGINX_MODE_FILE"
     else
         echo -e "${YELLOW}OpenResty/Nginx 未找到 PID 文件${NC}"
     fi
@@ -92,6 +107,10 @@ main() {
     stop_service "store_srv"
     stop_service "file_srv"
     stop_service "account_srv"
+    if [ -x "$CLAMD_HELPER" ]; then
+        echo -e "${YELLOW}停止 clamd_local...${NC}"
+        "$CLAMD_HELPER" stop | sed 's/^/  /'
+    fi
 
     # 停止 C++ Gateway
     stop_service "gateway"

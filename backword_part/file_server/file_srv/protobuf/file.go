@@ -4,14 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"go_test/backword_part/model"
 	"go_test/internal"
 	"io"
 	"mime"
-	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -22,20 +21,30 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
-	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	status "google.golang.org/grpc/status"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const (
-	metaKeyPrefix  = "mp:meta:"
-	partsKeyPrefix = "mp:parts:"
-	defaultTTL     = 24 * time.Hour
+	metaKeyPrefix          = "mp:meta:"
+	defaultTTL             = 24 * time.Hour
+	multipartPresignExpiry = 15 * time.Minute
 )
+
+var errObjectMissing = errors.New("file object missing in storage")
+
+type FileServer struct {
+	UnimplementedFileServiceServer
+}
+
+type uploadObjectResult struct {
+	info minio.UploadInfo
+	err  error
+}
 
 func genUploadID() string {
 	var b [16]byte
@@ -43,298 +52,772 @@ func genUploadID() string {
 	return hex.EncodeToString(b[:])
 }
 
-func metaKey(uploadID string) string  { return metaKeyPrefix + uploadID }
-func partsKey(uploadID string) string { return partsKeyPrefix + uploadID }
+func metaKey(uploadID string) string { return metaKeyPrefix + uploadID }
 
-// buildObjectKey：你可以按“user_id/file_hash”或“user_id/uuid_filename”来。
-// 这里优先用 file_hash（利于去重/查找），hash 为空就退化到 upload_id。
-func buildObjectKey(userID, fileHash, uploadID, fileName string) string {
-	if fileHash != "" {
-		return fmt.Sprintf("u/%s/%s", userID, fileHash)
-	}
-	return fmt.Sprintf("u/%s/%s_%s", userID, uploadID, fileName)
+func buildObjectKey(fileHash string) string {
+	return fmt.Sprintf("files/%s", strings.TrimSpace(fileHash))
 }
 
-// 生成 Content-Disposition（兼容中文文件名）
 func buildAttachmentContentDisposition(filename string) string {
-	name := strings.ReplaceAll(filename, `"`, "") // 简单去掉引号，避免 header 注入/格式问题
-	// RFC 5987：filename* 支持 UTF-8
+	name := strings.ReplaceAll(filename, `"`, "")
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
 		name, url.QueryEscape(name))
 }
 
 func buildInlineContentDisposition(filename string) string {
 	name := strings.TrimSpace(filename)
-
-	// 防止 header 注入（CRLF），以及破坏语法的引号
 	name = strings.ReplaceAll(name, "\r", "")
 	name = strings.ReplaceAll(name, "\n", "")
 	name = strings.ReplaceAll(name, `"`, "")
-
-	// filename* 使用 RFC 5987（UTF-8 + url-escape）
-	esc := url.QueryEscape(name)
-
-	return fmt.Sprintf(`inline; filename="%s"; filename*=UTF-8''%s`, name, esc)
+	return fmt.Sprintf(`inline; filename="%s"; filename*=UTF-8''%s`, name, url.QueryEscape(name))
 }
 
-// 获取文件扩展名
-func detectMime(localPath string) string {
-	// 先用扩展名（如果本地临时文件带后缀）
-	ext := strings.ToLower(filepath.Ext(localPath))
+func resolveDownloadFilename(filename string, file *model.File) string {
+	name := strings.TrimSpace(filename)
+	if name != "" {
+		return name
+	}
+	if file == nil {
+		return "download.bin"
+	}
+	if ext := filepath.Ext(strings.TrimSpace(file.ObjectKey)); ext != "" {
+		return "download" + ext
+	}
+	return "download.bin"
+}
+
+func buildPresignedGetURL(objectKey, filename, contentDisposition, contentType string) (string, error) {
+	reqParams := make(url.Values)
+	if contentDisposition != "" {
+		reqParams.Set("response-content-disposition", contentDisposition)
+	}
+	if contentType != "" {
+		reqParams.Set("response-content-type", contentType)
+	}
+	return internal.MinIOClient.MinIOPresignGetURLWithParams(objectKey, 10*time.Minute, reqParams)
+}
+
+func detectMimeByName(filename, fallback string) string {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(filename)))
 	if ext != "" {
 		if mt := mime.TypeByExtension(ext); mt != "" {
 			return mt
 		}
 	}
-
-	// 再用内容嗅探（更可靠）
-	f, err := os.Open(localPath)
-	if err != nil {
-		return "application/octet-stream"
+	if fallback != "" {
+		return fallback
 	}
-	defer f.Close()
-
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	return http.DetectContentType(buf[:n])
+	return "application/octet-stream"
 }
 
-type FileServer struct {
-	UnimplementedFileServiceServer
+func reuseMessage(status string, scanQueued bool) string {
+	switch status {
+	case model.FileSuccess:
+		return "existing clean object reused"
+	case model.FilePendingScan:
+		if scanQueued {
+			return "existing object reused, virus scan queued"
+		}
+		return "existing object pending virus scan"
+	case model.FileInfected:
+		return "file blocked by virus scan"
+	default:
+		if scanQueued {
+			return "existing object reused, virus scan queued"
+		}
+		return "existing object reused"
+	}
 }
 
-// -------------------------
-// 文件基本操作
-// -------------------------
-func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, internal.Logger)
-	sha1 := req.Filehash
-	filename := req.Filename
-	userID := req.Userid
+func ensureAccount(ctx context.Context, userID string) (*model.Account, error) {
 	var account model.Account
-	// 1) 确认用户
-	tx := internal.DB.WithContext(ctx)
-	if err := tx.First(&account, userID).Error; err != nil {
+	if err := internal.DB.WithContext(ctx).First(&account, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			l.Error("[Download]account not found", zap.Error(err))
-			return nil, fmt.Errorf("[Download]account not found")
+			return nil, fmt.Errorf("account not found")
 		}
 		return nil, err
 	}
-	// 2) 查表确认文件已在oss且状态
-	var file model.File
-	err := tx.Where("sha1 = ? AND status = ?", sha1, model.FileSuccess).Take(&file).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("[Download]file not found or status mismatch: sha1=%s status=%s", sha1, model.FileSuccess)
-		}
-		return nil, fmt.Errorf("[Download]db error: %w", err)
-	}
-	// 3) 生成 OSS 签名下载 URL
-	// objectKey：OSS 对象名就是 file/sha1
-	objectKey := "files/" + sha1
-	reqParams := make(url.Values)
-	// Content-Disposition：让浏览器下载时显示原始文件名（带后缀）
-	cd := buildAttachmentContentDisposition(filename)
-	reqParams.Set("response-content-disposition", cd)
-	reqParams.Set("response-content-type", detectMime(filename))
-	// 过期时间：按需调整（例如 10 分钟）
-	expiry := 10 * time.Minute
-	u, err := internal.MinIOClient.Client.PresignedGetObject(ctx, internal.MinIOClient.Bucket, objectKey, expiry, reqParams)
-	if err != nil {
-		l.Error("sign url", zap.Error(err))
-		return nil, fmt.Errorf("[Download]generate oss signed url failed: %w", err)
-	}
-
-	// Code: 1 表示返回的是 OSS 下载 URL
-	l.Info("[Download]download from oss", zap.String("signedUrl", u.String()))
-	return &Resp{Code: 0, Message: u.String()}, nil
+	return &account, nil
 }
 
-func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, internal.Logger)
-	userID := req.Userid
-	fileName := req.Filename
-	sha1 := req.FileHash
-	content := req.Content // []byte 或 string
-	size := req.FileSize
+func incomingUserID(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	values := md.Get("x-user-id")
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
+}
 
-	var resp Resp
+func ensureMultipartOwner(ctx context.Context, ownerUserID string) error {
+	currentUserID := incomingUserID(ctx)
+	if currentUserID == "" {
+		return status.Error(codes.Unauthenticated, "missing user identity")
+	}
+	if strings.TrimSpace(ownerUserID) != currentUserID {
+		return status.Error(codes.PermissionDenied, "upload session does not belong to current user")
+	}
+	return nil
+}
+
+func ensureUserFile(tx *gorm.DB, accountID, fileID uint, fileName string) error {
+	var existing model.UserFile
+	err := tx.Unscoped().
+		Where("account_id = ? AND file_id = ? AND name = ?", accountID, fileID, fileName).
+		Take(&existing).Error
+	if err == nil {
+		if !existing.DeletedAt.Valid {
+			return nil
+		}
+		return tx.Unscoped().
+			Model(&model.UserFile{}).
+			Where("id = ?", existing.ID).
+			Updates(map[string]any{
+				"deleted_at": nil,
+				"updated_at": time.Now(),
+			}).Error
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	uf := model.UserFile{
+		AccountID: accountID,
+		FileID:    fileID,
+		Name:      fileName,
+	}
+	if err := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "account_id"}, {Name: "file_id"}, {Name: "name"}},
+		DoNothing: true,
+	}).Create(&uf).Error; err != nil {
+		return err
+	}
+
+	return tx.Unscoped().
+		Model(&model.UserFile{}).
+		Where("account_id = ? AND file_id = ? AND name = ? AND deleted_at IS NOT NULL", accountID, fileID, fileName).
+		Updates(map[string]any{
+			"deleted_at": nil,
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func duplicateKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Duplicate entry") || strings.Contains(msg, "Error 1062")
+}
+
+func marshalOutboxHeaders(ctx context.Context) string {
+	headers := map[string]string{}
+	if rid := internal.RequestIDFromContext(ctx); rid != "" {
+		headers["x-request-id"] = rid
+	}
+	b, _ := json.Marshal(headers)
+	return string(b)
+}
+
+func enqueueScanRequested(ctx context.Context, tx *gorm.DB, file *model.File, userID string) error {
+	txID := uuid.NewString()
+	eventID := txID + ":SCAN_REQUESTED"
+	payload := model.FileEventPayload{
+		TxID:        txID,
+		EventID:     eventID,
+		FileID:      file.ID,
+		UserID:      userID,
+		Sha1:        file.Sha1,
+		Size:        file.Size,
+		OssKey:      file.ObjectKey,
+		ContentType: file.ContentType,
+		EventType:   model.FileScanRequested,
+	}
+	body, _ := json.Marshal(payload)
+
+	return tx.Create(&model.Outbox{
+		EventID:     eventID,
+		TxID:        txID,
+		EventType:   model.FileScanRequested,
+		Topic:       model.FileUploadEventTopic,
+		Key:         file.Sha1,
+		Payload:     string(body),
+		Headers:     marshalOutboxHeaders(ctx),
+		Status:      model.OutboxNew,
+		RetryCount:  0,
+		NextRetryAt: time.Now(),
+	}).Error
+}
+
+func upsertFileAndRelation(
+	ctx context.Context,
+	account *model.Account,
+	userID, fileName, fileHash, contentType, objectKey string,
+	fileSize int64,
+	requeueScan bool,
+) (*model.File, bool, error) {
+	var (
+		file          model.File
+		shouldEnqueue bool
+	)
 
 	err := internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 1. 校验用户存在
-		var account model.Account
-		if err := tx.First(&account, userID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				l.Error("[LoadFile]account not found", zap.Error(err))
-				return fmt.Errorf("[LoadFile]account not found")
+		err := tx.Unscoped().Where("sha1 = ?", fileHash).Take(&file).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			file = model.File{
+				Sha1:        fileHash,
+				Size:        fileSize,
+				Status:      model.FilePendingScan,
+				ObjectKey:   objectKey,
+				ContentType: contentType,
 			}
-			l.Error("[LoadFile]User verification failed", zap.Error(err))
-			return err
+			if err := tx.Create(&file).Error; err != nil {
+				if !duplicateKey(err) {
+					return err
+				}
+				if err := tx.Unscoped().Where("sha1 = ?", fileHash).Take(&file).Error; err != nil {
+					return err
+				}
+				shouldEnqueue = true
+			} else {
+				shouldEnqueue = true
+			}
 		}
 
-		// 2. 确保 File 存在：根据 Sha1 去重
-		file := model.File{
-			Sha1:   sha1,
-			Size:   int64(size),
-			Status: model.FilePending,
+		if file.DeletedAt.Valid {
+			restoreUpdates := map[string]any{
+				"deleted_at": nil,
+				"updated_at": time.Now(),
+			}
+			if objectKey != "" {
+				restoreUpdates["object_key"] = objectKey
+				file.ObjectKey = objectKey
+			}
+			if contentType != "" {
+				restoreUpdates["content_type"] = contentType
+				file.ContentType = contentType
+			}
+			if fileSize > 0 {
+				restoreUpdates["size"] = fileSize
+				file.Size = fileSize
+			}
+			if err := tx.Unscoped().Model(&model.File{}).Where("id = ?", file.ID).Updates(restoreUpdates).Error; err != nil {
+				return err
+			}
+			file.DeletedAt = gorm.DeletedAt{}
+			shouldEnqueue = true
 		}
 
-		// 利用唯一索引 + OnConflict，避免重复插入
-		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "sha1"}}, // 以 sha1 为准
-			DoNothing: true,
-		}).Create(&file).Error; err != nil {
-			l.Error("[LoadFile]File listFile table insertion failed", zap.Error(err))
-			return err
+		metadataUpdates := map[string]any{}
+		if objectKey != "" && file.ObjectKey == "" {
+			metadataUpdates["object_key"] = objectKey
+			file.ObjectKey = objectKey
 		}
-
-		// 如果是 DoNothing，Create 不会把已有记录的 ID 带回，所以再查一次 ID拿到真正的 ID
-		if file.ID == 0 {
-			if err := tx.Where("sha1 = ?", sha1).First(&file).Error; err != nil {
-				l.Error("[LoadFile]Cannot find the corresponding file", zap.Error(err))
+		if contentType != "" && file.ContentType == "" {
+			metadataUpdates["content_type"] = contentType
+			file.ContentType = contentType
+		}
+		if fileSize > 0 && file.Size == 0 {
+			metadataUpdates["size"] = fileSize
+			file.Size = fileSize
+		}
+		if len(metadataUpdates) > 0 {
+			if err := tx.Model(&model.File{}).Where("id = ?", file.ID).Updates(metadataUpdates).Error; err != nil {
 				return err
 			}
 		}
 
-		// 3. 在 UserFile 中建立关系，同样用唯一索引避免重复
-		uf := model.UserFile{
-			AccountID: account.ID,
-			FileID:    file.ID,
-			Name:      fileName,
+		switch file.Status {
+		case model.FileInfected:
+			return fmt.Errorf("file blocked by virus scan")
+		case model.FilePendingScan, model.FileSuccess:
+			// 已有对象已在扫描中或已通过扫描，只补 user_files 关系，不重复投递扫描事件。
+		case model.FileScanFailed:
+			updates := map[string]any{
+				"status":      model.FilePendingScan,
+				"scan_detail": "",
+				"scanned_at":  nil,
+			}
+			if objectKey != "" {
+				updates["object_key"] = objectKey
+			}
+			if contentType != "" {
+				updates["content_type"] = contentType
+			}
+			if fileSize > 0 {
+				updates["size"] = fileSize
+			}
+			if err := tx.Model(&model.File{}).Where("id = ?", file.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			file.Status = model.FilePendingScan
+			file.ScanDetail = ""
+			file.ScannedAt = nil
+			if objectKey != "" {
+				file.ObjectKey = objectKey
+			}
+			if contentType != "" {
+				file.ContentType = contentType
+			}
+			if fileSize > 0 {
+				file.Size = fileSize
+			}
+			shouldEnqueue = true
+		case "":
+			// 兼容历史脏数据：旧记录 status 为空时回填为 pending_scan 并补一条扫描事件。
+			if err := tx.Model(&model.File{}).Where("id = ?", file.ID).Updates(map[string]any{
+				"status":       model.FilePendingScan,
+				"object_key":   objectKey,
+				"content_type": contentType,
+				"size":         fileSize,
+			}).Error; err != nil {
+				return err
+			}
+			file.Status = model.FilePendingScan
+			file.ObjectKey = objectKey
+			file.ContentType = contentType
+			file.Size = fileSize
+			shouldEnqueue = true
 		}
 
-		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "account_id"}, {Name: "file_id"}, {Name: "name"}},
-			DoNothing: true,
-		}).Create(&uf).Error; err != nil {
-			l.Error("[LoadFile]User file relationship creation failed", zap.Error(err))
+		if requeueScan && file.Status != model.FilePendingScan {
+			if err := tx.Model(&model.File{}).Where("id = ?", file.ID).Updates(map[string]any{
+				"status":      model.FilePendingScan,
+				"scan_detail": "",
+				"scanned_at":  nil,
+			}).Error; err != nil {
+				return err
+			}
+			file.Status = model.FilePendingScan
+			file.ScanDetail = ""
+			file.ScannedAt = nil
+			shouldEnqueue = true
+		}
+
+		if err := ensureUserFile(tx, account.ID, file.ID, fileName); err != nil {
 			return err
 		}
 
-		// 关键：如果文件已经 READY说明已经存在oss，不再触发异步写 OSS,到这里结束
-		if file.Status == "READY" {
-			l.Info("[LoadFile]The file already exists in the OSS.")
-			return nil
+		if shouldEnqueue {
+			if err := enqueueScanRequested(ctx, tx, &file, userID); err != nil {
+				return err
+			}
 		}
-
-		//否则写入outbox发送给kafka生产者线程处理
-		txID := uuid.NewString()
-		eventID := txID + ":UPLOAD_CMD"
-		p := model.UploadCmdPayload{
-			TxID:      txID,
-			EventID:   eventID,
-			FileID:    file.ID,
-			Sha1:      sha1,
-			Size:      size,
-			OssKey:    "files/" + sha1,
-			Content:   string(content),
-			Type:      detectMime(fileName),
-			EventType: model.LoadFile,
-		}
-		b, _ := json.Marshal(p)
-
-		// 将 request_id 写入 Outbox Headers，供 Kafka 链路追踪
-		rid := internal.RequestIDFromContext(ctx)
-		headers := map[string]string{}
-		if rid != "" {
-			headers["x-request-id"] = rid
-		}
-		headersJSON, _ := json.Marshal(headers)
-
-		ob := model.Outbox{
-			EventID:     eventID,
-			TxID:        txID,
-			EventType:   "FILE_UPLOAD_CMD",
-			Topic:       "file.upload.cmd",
-			Key:         sha1,
-			Payload:     string(b),
-			Headers:     string(headersJSON),
-			Status:      model.OutboxNew,
-			RetryCount:  0,
-			NextRetryAt: time.Now(),
-		}
-		if err := tx.Create(&ob).Error; err != nil {
-			l.Error("[LoadFile]Outbox create table failed", zap.Error(err))
-			return err
-		}
-
 		return nil
 	})
-
 	if err != nil {
-		l.Error("[LoadFile]Transaction failed rollback", zap.Error(err))
-		return &Resp{Code: 1, Message: err.Error()}, err
+		return nil, false, err
 	}
-
-	resp = Resp{
-		Code:    0,
-		Message: "pending",
-	}
-	return &resp, nil
+	return &file, shouldEnqueue, nil
 }
 
-func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, internal.Logger)
-	sha1 := req.Filehash
-	filename := req.Filename
-	userID := req.Userid
+func findFileByHash(ctx context.Context, fileHash string) (*model.File, error) {
+	var file model.File
+	err := internal.DB.WithContext(ctx).Where("sha1 = ?", fileHash).Take(&file).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &file, nil
+}
 
-	var account model.Account
-	tx := internal.DB.WithContext(ctx)
-	if err := tx.First(&account, userID).Error; err != nil {
+func drainUploadFileStream(stream FileService_UploadFileServer) error {
+	for {
+		msg, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(msg.GetData()) == 0 {
+			continue
+		}
+	}
+}
+
+func resolveStoredObjectKey(file *model.File) string {
+	if file == nil {
+		return ""
+	}
+	if key := strings.TrimSpace(file.ObjectKey); key != "" {
+		return key
+	}
+	if hash := strings.TrimSpace(file.Sha1); hash != "" {
+		return buildObjectKey(hash)
+	}
+	return ""
+}
+
+func fileUnavailableMessage(file *model.File) string {
+	if file == nil {
+		return "file is not available for download"
+	}
+	if detail := strings.TrimSpace(file.ScanDetail); detail != "" &&
+		(file.Status == model.FileScanFailed || file.Status == model.FileInfected) {
+		return detail
+	}
+	switch file.Status {
+	case model.FilePendingScan:
+		return "file is pending virus scan"
+	case model.FileInfected:
+		return "file blocked by virus scan"
+	case model.FileScanFailed:
+		if detail := strings.TrimSpace(file.ScanDetail); detail != "" {
+			return detail
+		}
+		return "file scan failed"
+	default:
+		return "file is not available for download"
+	}
+}
+
+func markFileObjectMissing(ctx context.Context, file *model.File, objectKey string) {
+	if file == nil || file.ID == 0 {
+		return
+	}
+	detail := "file object missing in storage"
+	updates := map[string]any{
+		"status":      model.FileScanFailed,
+		"scan_detail": detail,
+		"updated_at":  time.Now(),
+	}
+	if strings.TrimSpace(file.ObjectKey) == "" && objectKey != "" {
+		updates["object_key"] = objectKey
+	}
+	if err := internal.DB.WithContext(ctx).
+		Model(&model.File{}).
+		Where("id = ?", file.ID).
+		Updates(updates).Error; err != nil {
+		internal.Logger.Warn("[file]mark missing object failed",
+			zap.Uint("file_id", file.ID),
+			zap.String("object_key", objectKey),
+			zap.Error(err))
+	}
+	file.Status = model.FileScanFailed
+	file.ScanDetail = detail
+	if strings.TrimSpace(file.ObjectKey) == "" {
+		file.ObjectKey = objectKey
+	}
+}
+
+func ensureStoredObjectAvailable(ctx context.Context, file *model.File) (string, error) {
+	if file == nil || file.ID == 0 {
+		return "", gorm.ErrRecordNotFound
+	}
+	objectKey := resolveStoredObjectKey(file)
+	if objectKey == "" {
+		markFileObjectMissing(ctx, file, objectKey)
+		return "", errObjectMissing
+	}
+	if internal.MinIOClient == nil || internal.MinIOClient.Client == nil {
+		return objectKey, fmt.Errorf("object storage unavailable")
+	}
+
+	exists, err := internal.MinIOClient.MinIOObjectExists(objectKey)
+	if err != nil {
+		return objectKey, err
+	}
+	if !exists {
+		markFileObjectMissing(ctx, file, objectKey)
+		return objectKey, errObjectMissing
+	}
+	if strings.TrimSpace(file.ObjectKey) == "" {
+		if err := internal.DB.WithContext(ctx).
+			Model(&model.File{}).
+			Where("id = ?", file.ID).
+			Updates(map[string]any{
+				"object_key": objectKey,
+				"updated_at": time.Now(),
+			}).Error; err != nil {
+			internal.Logger.Warn("[file]persist object key failed",
+				zap.Uint("file_id", file.ID),
+				zap.String("object_key", objectKey),
+				zap.Error(err))
+		} else {
+			file.ObjectKey = objectKey
+		}
+	}
+	return objectKey, nil
+}
+
+func findOwnedUserFile(ctx context.Context, accountID uint, filename, fileHash string) (*model.UserFile, error) {
+	var uf model.UserFile
+
+	q := internal.DB.WithContext(ctx).
+		Preload("File").
+		Where("user_files.account_id = ?", accountID)
+	if filename = strings.TrimSpace(filename); filename != "" {
+		q = q.Where("user_files.name = ?", filename)
+	}
+	if fileHash = strings.TrimSpace(fileHash); fileHash != "" {
+		q = q.Joins("JOIN files ON files.id = user_files.file_id AND files.deleted_at IS NULL").
+			Where("files.sha1 = ?", fileHash)
+	}
+	if err := q.Order("user_files.id desc").Take(&uf).Error; err != nil {
+		return nil, err
+	}
+	if uf.File.ID == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &uf, nil
+}
+
+func fileUnavailableResp(file *model.File) (*RespResolveFileHash, error) {
+	return &RespResolveFileHash{
+		Code:    409,
+		Message: fileUnavailableMessage(file),
+	}, nil
+}
+
+func listUploadedParts(ctx context.Context, objectKey, ossUploadID string) ([]minio.ObjectPart, error) {
+	parts, err := internal.MinIOClient.MinIOMultipartListParts(ctx, objectKey, ossUploadID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
+	return parts, nil
+}
+
+func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, internal.Logger)
+	account, err := ensureAccount(ctx, req.Userid)
+	if err != nil {
+		l.Error("[Download]account not found", zap.Error(err))
+		return &Resp{Code: 404, Message: err.Error()}, nil
+	}
+
+	uf, err := findOwnedUserFile(ctx, account.ID, req.Filename, req.Filehash)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("[Showfile]account not found")
+			return &Resp{Code: 404, Message: "file not found"}, nil
 		}
 		return nil, err
 	}
-
-	// 查表确认文件已在oss且状态
-	var file model.File
-	if err := tx.Model(&model.File{}).Where("sha1 = ? AND status=? ", sha1, model.FileSuccess).
-		Take(&file).Error; err != nil {
-		return nil, fmt.Errorf("[showfile]file not ready in oss: err=%s", err.Error())
+	file := &uf.File
+	if file.Status != model.FileSuccess {
+		return &Resp{Code: 409, Message: fileUnavailableMessage(file)}, nil
 	}
-	// 生成 OSS inline 预览 URL（关键：inline + filename + content-type）
-	//mimeType := detectContentTypeByFilename(filename) // 更推荐从 DB 取 content_type
-	objectKey := "files/" + sha1
-	reqParams := make(url.Values)
-	cd := buildInlineContentDisposition(filename) // inline; filename*=UTF-8''...
-	reqParams.Set("response-content-disposition", cd)
-	reqParams.Set("response-content-type", detectMime(filename))
-	expiry := 10 * time.Minute
-	u, err := internal.MinIOClient.Client.PresignedGetObject(ctx, internal.MinIOClient.Bucket, objectKey, expiry, reqParams)
+
+	objectKey, err := ensureStoredObjectAvailable(ctx, file)
 	if err != nil {
-		l.Error("sign url", zap.Error(err))
+		if errors.Is(err, errObjectMissing) {
+			return &Resp{Code: 409, Message: fileUnavailableMessage(file)}, nil
+		}
+		l.Error("[Download]check object", zap.Uint("file_id", file.ID), zap.Error(err))
+		return &Resp{Code: 503, Message: "object storage unavailable"}, nil
+	}
+
+	filename := resolveDownloadFilename(req.Filename, file)
+	contentType := detectMimeByName(filename, strings.TrimSpace(file.ContentType))
+	u, err := buildPresignedGetURL(objectKey, filename, buildAttachmentContentDisposition(filename), contentType)
+	if err != nil {
+		l.Error("[Download]sign url", zap.Error(err))
+		return nil, fmt.Errorf("[Download]generate oss signed url failed: %w", err)
+	}
+	return &Resp{Code: 0, Message: u}, nil
+}
+
+func (f FileServer) LoadFile(ctx context.Context, req *Reqloadfile) (*Resp, error) {
+	return &Resp{Code: 410, Message: "deprecated, use streaming UploadFile"}, nil
+}
+
+func (s FileServer) UploadFile(stream FileService_UploadFileServer) error {
+	ctx := stream.Context()
+	l := internal.LoggerWithRID(ctx, internal.Logger)
+
+	first, err := stream.Recv()
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "recv meta: %v", err)
+	}
+
+	meta := first.GetMeta()
+	if meta == nil {
+		return status.Error(codes.InvalidArgument, "first message must be meta")
+	}
+	meta.FileHash = strings.TrimSpace(meta.FileHash)
+	meta.FileName = strings.TrimSpace(meta.FileName)
+	meta.UserId = strings.TrimSpace(meta.UserId)
+	meta.ContentType = detectMimeByName(meta.FileName, meta.ContentType)
+	if meta.UserId == "" || meta.FileName == "" || meta.FileHash == "" || meta.FileSize < 0 {
+		return status.Error(codes.InvalidArgument, "missing user_id/file_name/file_hash or invalid size")
+	}
+
+	account, err := ensureAccount(ctx, meta.UserId)
+	if err != nil {
+		return status.Error(codes.NotFound, err.Error())
+	}
+
+	existing, err := findFileByHash(ctx, meta.FileHash)
+	if err != nil {
+		return status.Errorf(codes.Internal, "query file by hash: %v", err)
+	}
+	if existing != nil {
+		if err := drainUploadFileStream(stream); err != nil {
+			return status.Errorf(codes.Canceled, "drain duplicate upload stream: %v", err)
+		}
+		file, scanQueued, err := upsertFileAndRelation(ctx, account, meta.UserId, meta.FileName, meta.FileHash, meta.ContentType, existing.ObjectKey, meta.FileSize, existing.Status == model.FileScanFailed)
+		if err != nil {
+			if strings.Contains(err.Error(), "blocked by virus scan") {
+				return stream.SendAndClose(&UploadFileResp{
+					FileHash:  meta.FileHash,
+					ObjectKey: existing.ObjectKey,
+					Status:    model.FileInfected,
+					Message:   err.Error(),
+				})
+			}
+			return status.Errorf(codes.Internal, "attach existing file: %v", err)
+		}
+		return stream.SendAndClose(&UploadFileResp{
+			FileHash:  file.Sha1,
+			ObjectKey: file.ObjectKey,
+			Status:    file.Status,
+			Message:   reuseMessage(file.Status, scanQueued),
+		})
+	}
+
+	objectKey := buildObjectKey(meta.FileHash)
+	pipeReader, pipeWriter := io.Pipe()
+	uploadResultCh := make(chan uploadObjectResult, 1)
+	go func() {
+		info, uploadErr := internal.MinIOClient.MinIOUploadStream(
+			ctx,
+			pipeReader,
+			meta.FileSize,
+			objectKey,
+			meta.ContentType,
+			map[string]string{
+				"x-file-name": meta.FileName,
+				"x-file-hash": meta.FileHash,
+				"x-user-id":   meta.UserId,
+			},
+		)
+		uploadResultCh <- uploadObjectResult{info: info, err: uploadErr}
+	}()
+
+	var written int64
+	for {
+		msg, recvErr := stream.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			_ = pipeWriter.CloseWithError(recvErr)
+			<-uploadResultCh
+			return status.Errorf(codes.Canceled, "recv data: %v", recvErr)
+		}
+		chunk := msg.GetData()
+		if len(chunk) == 0 {
+			continue
+		}
+		n, writeErr := pipeWriter.Write(chunk)
+		if writeErr != nil {
+			_ = pipeWriter.CloseWithError(writeErr)
+			<-uploadResultCh
+			return status.Errorf(codes.Internal, "stream write: %v", writeErr)
+		}
+		written += int64(n)
+	}
+
+	if written != meta.FileSize {
+		sizeErr := fmt.Errorf("file_size mismatch: expect=%d got=%d", meta.FileSize, written)
+		_ = pipeWriter.CloseWithError(sizeErr)
+		<-uploadResultCh
+		return status.Error(codes.InvalidArgument, sizeErr.Error())
+	}
+
+	if err := pipeWriter.Close(); err != nil {
+		<-uploadResultCh
+		return status.Errorf(codes.Internal, "close upload pipe: %v", err)
+	}
+
+	uploadResult := <-uploadResultCh
+	if uploadResult.err != nil {
+		return status.Errorf(codes.Internal, "upload to object storage: %v", uploadResult.err)
+	}
+
+	file, _, err := upsertFileAndRelation(ctx, account, meta.UserId, meta.FileName, meta.FileHash, meta.ContentType, objectKey, meta.FileSize, false)
+	if err != nil {
+		_ = internal.MinIOClient.MinIODeleteObject(objectKey)
+		if strings.Contains(err.Error(), "blocked by virus scan") {
+			return stream.SendAndClose(&UploadFileResp{
+				FileHash:  meta.FileHash,
+				ObjectKey: objectKey,
+				Status:    model.FileInfected,
+				Message:   err.Error(),
+			})
+		}
+		l.Error("[UploadFile]finalize uploaded file failed", zap.Error(err))
+		return status.Errorf(codes.Internal, "finalize uploaded file: %v", err)
+	}
+
+	return stream.SendAndClose(&UploadFileResp{
+		FileHash:  file.Sha1,
+		ObjectKey: file.ObjectKey,
+		Status:    file.Status,
+		Message:   "uploaded",
+	})
+}
+
+func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, error) {
+	account, err := ensureAccount(ctx, req.Userid)
+	if err != nil {
+		return &Resp{Code: 404, Message: err.Error()}, nil
+	}
+
+	uf, err := findOwnedUserFile(ctx, account.ID, req.Filename, req.Filehash)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &Resp{Code: 404, Message: "file not found"}, nil
+		}
+		return nil, err
+	}
+	file := &uf.File
+	if file.Status != model.FileSuccess {
+		return &Resp{Code: 409, Message: fileUnavailableMessage(file)}, nil
+	}
+
+	objectKey, err := ensureStoredObjectAvailable(ctx, file)
+	if err != nil {
+		if errors.Is(err, errObjectMissing) {
+			return &Resp{Code: 409, Message: fileUnavailableMessage(file)}, nil
+		}
+		return &Resp{Code: 503, Message: "object storage unavailable"}, nil
+	}
+
+	filename := resolveDownloadFilename(req.Filename, file)
+	contentType := detectMimeByName(filename, strings.TrimSpace(file.ContentType))
+	u, err := buildPresignedGetURL(objectKey, filename, buildInlineContentDisposition(filename), contentType)
+	if err != nil {
 		return nil, fmt.Errorf("[Showfile]generate oss signed url failed: %w", err)
 	}
-	l.Info("[Showfile]showfile from oss", zap.String("signedUrl", u.String()))
-	return &Resp{Code: 0, Message: u.String()}, nil
+	return &Resp{Code: 0, Message: u}, nil
 }
 
 func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, error) {
-	l := internal.LoggerWithRID(ctx, internal.Logger)
 	userID := strings.TrimSpace(req.Userid)
 	filename := strings.TrimSpace(req.Filename)
 	filehash := strings.TrimSpace(req.Filehash)
-
 	if userID == "" || filename == "" {
 		return &Resp{Code: 400, Message: "missing userid/filename"}, nil
 	}
 
-	tx := internal.DB.WithContext(ctx)
-
-	// 校验用户存在
-	var account model.Account
-	if err := tx.First(&account, userID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &Resp{Code: 404, Message: "account not found"}, nil
-		}
-		return &Resp{Code: 500, Message: err.Error()}, err
+	account, err := ensureAccount(ctx, userID)
+	if err != nil {
+		return &Resp{Code: 404, Message: err.Error()}, nil
 	}
 
-	// 查找用户文件关系并预加载文件
 	var uf model.UserFile
+	tx := internal.DB.WithContext(ctx)
 	q := tx.Preload("File").Where("account_id = ? AND name = ?", account.ID, filename)
 	if filehash != "" {
 		q = q.Joins("JOIN files ON files.id = user_files.file_id AND files.sha1 = ?", filehash)
@@ -343,26 +826,27 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &Resp{Code: 404, Message: "file not found"}, nil
 		}
-		return &Resp{Code: 500, Message: err.Error()}, err
+		return nil, err
+	}
+	if uf.File.Status == model.FilePendingScan {
+		return &Resp{Code: 409, Message: "file is pending virus scan"}, nil
 	}
 
 	fileID := uf.FileID
-	sha1 := uf.File.Sha1
+	objectKey := uf.File.ObjectKey
+	if objectKey == "" && uf.File.Sha1 != "" {
+		objectKey = buildObjectKey(uf.File.Sha1)
+	}
 
 	var remaining int64
 	if err := tx.Transaction(func(tx *gorm.DB) error {
-		// 删除用户与文件的关系
 		if err := tx.Where("account_id = ? AND file_id = ? AND name = ?", account.ID, fileID, uf.Name).
 			Delete(&model.UserFile{}).Error; err != nil {
 			return err
 		}
-
-		// 统计剩余引用数
 		if err := tx.Model(&model.UserFile{}).Where("file_id = ?", fileID).Count(&remaining).Error; err != nil {
 			return err
 		}
-
-		// 无引用则删除 File 记录
 		if remaining == 0 {
 			if err := tx.Where("id = ?", fileID).Delete(&model.File{}).Error; err != nil {
 				return err
@@ -370,18 +854,14 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 		}
 		return nil
 	}); err != nil {
-		l.Error("[DeleteFile]db transaction failed", zap.Error(err))
-		return &Resp{Code: 500, Message: err.Error()}, err
+		return nil, err
 	}
 
-	// 无剩余引用时尝试删除对象存储（最佳努力，不影响返回）
-	if remaining == 0 && sha1 != "" && internal.MinIOClient != nil && internal.MinIOClient.Client != nil {
+	if remaining == 0 && objectKey != "" && internal.MinIOClient != nil && internal.MinIOClient.Client != nil {
 		ctx2, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		objectKey := "files/" + sha1
-		err := internal.MinIOClient.Client.RemoveObject(ctx2, internal.MinIOClient.Bucket, objectKey, minio.RemoveObjectOptions{})
-		if err != nil {
-			l.Warn("[DeleteFile]remove object failed", zap.String("objectKey", objectKey), zap.Error(err))
+		if err := internal.MinIOClient.Client.RemoveObject(ctx2, internal.MinIOClient.Bucket, objectKey, minio.RemoveObjectOptions{}); err != nil {
+			internal.Logger.Warn("[DeleteFile]remove object failed", zap.String("objectKey", objectKey), zap.Error(err))
 		}
 	}
 
@@ -389,72 +869,83 @@ func (f FileServer) DeleteFile(ctx context.Context, req *ReqDeleteFile) (*Resp, 
 }
 
 func (f FileServer) Filequeryinfo(ctx context.Context, req *ReqFileQuery) (*RespFileQuery, error) {
-
-	userID := req.Userid
-	var resp RespFileQuery
-	var ufs []model.UserFile
-	tx := internal.DB.WithContext(ctx)
-	//确认用户存在
-	var account model.Account
-	if err := tx.First(&account, userID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("[Showfile]account not found")
-		}
-		return &RespFileQuery{Code: 1, Message: err.Error()}, err
-	}
-	//联表查询
-	err := tx.Where("account_id = ?", userID).Preload("File").Order("id desc").Find(&ufs).Error
+	account, err := ensureAccount(ctx, req.Userid)
 	if err != nil {
-		return &RespFileQuery{Code: 1, Message: err.Error()}, err
+		return &RespFileQuery{Code: 404, Message: err.Error()}, nil
 	}
-	//返回
-	resp = RespFileQuery{
+
+	var ufs []model.UserFile
+	if err := internal.DB.WithContext(ctx).
+		Where("account_id = ?", account.ID).
+		Preload("File").
+		Order("id desc").
+		Find(&ufs).Error; err != nil {
+		return &RespFileQuery{Code: 500, Message: err.Error()}, nil
+	}
+
+	resp := &RespFileQuery{
 		Code:    0,
-		Message: "db ok ",
-		Files:   make([]*FileInfo, 0, len(ufs)), // 预分配
+		Message: "ok",
+		Files:   make([]*FileInfo, 0, len(ufs)),
 	}
 	for _, uf := range ufs {
-		fileInfo := FileInfo{
+		if uf.File.ID == 0 {
+			internal.Logger.Warn("[Filequeryinfo]skip dangling relation",
+				zap.Uint("user_file_id", uf.ID),
+				zap.Uint("account_id", account.ID),
+				zap.String("filename", uf.Name))
+			continue
+		}
+		if uf.File.Status == model.FileSuccess {
+			if _, err := ensureStoredObjectAvailable(ctx, &uf.File); err != nil && !errors.Is(err, errObjectMissing) {
+				internal.Logger.Warn("[Filequeryinfo]stat object failed",
+					zap.Uint("file_id", uf.File.ID),
+					zap.String("filename", uf.Name),
+					zap.Error(err))
+			}
+		}
+		resp.Files = append(resp.Files, &FileInfo{
 			FileHash:    uf.File.Sha1,
 			FileName:    uf.Name,
 			FileSizes:   uf.File.Size,
 			UploadAt:    uf.File.CreatedAt.String(),
 			LastUpdated: uf.File.UpdatedAt.String(),
-		}
-		resp.Files = append(resp.Files, &fileInfo)
+			Status:      uf.File.Status,
+			ScanDetail:  uf.File.ScanDetail,
+			ContentType: uf.File.ContentType,
+		})
 	}
-	return &resp, nil
+	return resp, nil
 }
 
 func (s FileServer) ResolveFileHash(ctx context.Context, req *ReqResolveFileHash) (*RespResolveFileHash, error) {
-	// 1) 参数校验
 	filename := strings.TrimSpace(req.GetFilename())
 	if filename == "" {
 		return &RespResolveFileHash{Code: 400, Message: "filename is required"}, nil
 	}
 
-	// 2) userid -> uint（你现在 proto 里 userid 是 string）
 	uid64, err := strconv.ParseUint(strings.TrimSpace(req.GetUserid()), 10, 64)
 	if err != nil || uid64 == 0 {
 		return &RespResolveFileHash{Code: 400, Message: "invalid userid"}, nil
 	}
-	accountID := uint(uid64)
 
-	// 3) 查询：UserFile(account_id, name) + 预加载 File
-	var uf model.UserFile
-	err = internal.DB.
-		Preload("File").
-		Where("account_id = ? AND name = ?", accountID, filename).
-		Take(&uf).Error
-
+	uf, err := findOwnedUserFile(ctx, uint(uid64), filename, "")
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return &RespResolveFileHash{Code: 404, Message: "file not found"}, nil
 	}
 	if err != nil {
 		return &RespResolveFileHash{Code: 500, Message: "db error: " + err.Error()}, nil
 	}
+	if uf.File.Status != model.FileSuccess {
+		return fileUnavailableResp(&uf.File)
+	}
+	if _, err := ensureStoredObjectAvailable(ctx, &uf.File); err != nil {
+		if errors.Is(err, errObjectMissing) {
+			return fileUnavailableResp(&uf.File)
+		}
+		return &RespResolveFileHash{Code: 503, Message: "object storage unavailable"}, nil
+	}
 
-	// 4) 返回 sha1/size
 	return &RespResolveFileHash{
 		Code:     200,
 		Message:  "ok",
@@ -463,34 +954,56 @@ func (s FileServer) ResolveFileHash(ctx context.Context, req *ReqResolveFileHash
 	}, nil
 }
 
-// -------------------------
-// 大文件传输
-// -------------------------
 func (s FileServer) InitMultipart(ctx context.Context, req *InitReq) (*InitResp, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "nil req")
 	}
-	if req.UserId == "" || req.FileName == "" {
-		return nil, status.Error(codes.InvalidArgument, "missing user_id/file_name")
+	req.UserId = strings.TrimSpace(req.UserId)
+	req.FileName = strings.TrimSpace(req.FileName)
+	req.FileHash = strings.TrimSpace(req.FileHash)
+	req.ContentType = detectMimeByName(req.FileName, req.ContentType)
+	if req.UserId == "" || req.FileName == "" || req.FileHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing user_id/file_name/file_hash")
 	}
 	if req.FileSize <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "file_size must be > 0")
 	}
 
-	uploadID := genUploadID()
-	objectKey := buildObjectKey(req.UserId, req.FileHash, uploadID, req.FileName)
+	account, err := ensureAccount(ctx, req.UserId)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, err.Error())
+	}
 
-	// 计算 partSize / totalParts（用 minio-go 提供的 OptimalPartInfo）
-	// 注意：OptimalPartInfo 文档里说明其默认假设 minPartSize 等常量 :contentReference[oaicite:3]{index=3}
+	existing, err := findFileByHash(ctx, req.FileHash)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "query file by hash: %v", err)
+	}
+	if existing != nil {
+		file, scanQueued, err := upsertFileAndRelation(ctx, account, req.UserId, req.FileName, req.FileHash, req.ContentType, existing.ObjectKey, req.FileSize, existing.Status == model.FileScanFailed)
+		if err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return &InitResp{
+			ObjectKey: file.ObjectKey,
+			Status:    file.Status,
+			Message:   reuseMessage(file.Status, scanQueued),
+		}, nil
+	}
+
 	totalParts, partSize, _, err := minio.OptimalPartInfo(req.FileSize, 0)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "OptimalPartInfo: %v", err)
 	}
-	if totalParts <= 0 {
+	if totalParts <= 0 || partSize <= 0 {
+		totalParts = 1
+		partSize = req.FileSize
+	}
+	if totalParts <= 0 || partSize <= 0 {
 		return nil, status.Error(codes.Internal, "invalid total parts")
 	}
 
-	// 发起 MinIO Multipart，得到 MinIO 侧 uploadID（后续 PutPart/Complete 都需要这个）
+	uploadID := genUploadID()
+	objectKey := buildObjectKey(req.FileHash)
 	ossUploadID, err := internal.MinIOClient.MinIOMultipartInit(ctx, objectKey, req.ContentType, map[string]string{
 		"x-file-name": req.FileName,
 		"x-file-hash": req.FileHash,
@@ -500,26 +1013,23 @@ func (s FileServer) InitMultipart(ctx context.Context, req *InitReq) (*InitResp,
 		return nil, status.Errorf(codes.Internal, "minio init multipart: %v", err)
 	}
 
-	// 将 meta 写入 Redis（幂等不强求：upload_id 是新生成的）
-	mk := metaKey(uploadID)
-	pipe := internal.RedisClient.TxPipeline()
-	pipe.HSet(ctx, mk, map[string]any{
-		"user_id":       req.UserId,
-		"file_name":     req.FileName,
-		"file_size":     req.FileSize,
-		"file_hash":     req.FileHash,
-		"content_type":  req.ContentType,
-		"object_key":    objectKey,
-		"part_size":     partSize,
-		"total_parts":   totalParts,
-		"oss_upload_id": ossUploadID, // 关键：MinIO 的 uploadID
-		"status":        "init",
-	})
-	pipe.Expire(ctx, mk, defaultTTL)
-	pipe.Del(ctx, partsKey(uploadID)) // 清理旧 parts（一般不会存在）
-	pipe.Expire(ctx, partsKey(uploadID), defaultTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		_ = internal.MinIOClient.MinIOMultipartAbort(ctx, objectKey, ossUploadID) // 写 redis 失败，尽量回收 MinIO upload
+	if _, err := internal.RedisClient.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.HSet(ctx, metaKey(uploadID), map[string]any{
+			"user_id":       req.UserId,
+			"file_name":     req.FileName,
+			"file_size":     req.FileSize,
+			"file_hash":     req.FileHash,
+			"content_type":  req.ContentType,
+			"object_key":    objectKey,
+			"part_size":     partSize,
+			"total_parts":   totalParts,
+			"oss_upload_id": ossUploadID,
+			"status":        "init",
+		})
+		pipe.Expire(ctx, metaKey(uploadID), defaultTTL)
+		return nil
+	}); err != nil {
+		_ = internal.MinIOClient.MinIOMultipartAbort(ctx, objectKey, ossUploadID)
 		return nil, status.Errorf(codes.Internal, "redis save meta: %v", err)
 	}
 
@@ -528,293 +1038,207 @@ func (s FileServer) InitMultipart(ctx context.Context, req *InitReq) (*InitResp,
 		ObjectKey:  objectKey,
 		PartSize:   partSize,
 		TotalParts: int32(totalParts),
+		Status:     "init",
+		Message:    "multipart initialized",
 	}, nil
 }
 
-// -------------------- UploadPart（client-stream） --------------------
-func (s FileServer) UploadPart(stream grpc.ClientStreamingServer[UploadPartReq, UploadPartResp]) error {
-	ctx := stream.Context()
-
-	// 1) 先收 meta（协议约定：第一条是 meta）
-	first, err := stream.Recv()
-	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "recv meta: %v", err)
-	}
-
-	meta := first.GetMeta()
-	if meta == nil || meta.UploadId == "" || meta.PartNumber <= 0 {
-		return status.Error(codes.InvalidArgument, "first message must be meta with upload_id/part_number")
-	}
-
-	// 2) 从 Redis 取 object_key / oss_upload_id
-	mk := metaKey(meta.UploadId)
-	vals, err := internal.RedisClient.HMGet(ctx, mk, "object_key", "oss_upload_id", "content_type", "status").Result()
-	if err != nil {
-		return status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
-	}
-	objectKey, _ := vals[0].(string)
-	ossUploadID, _ := vals[1].(string)
-	// contentType, _ := vals[2].(string)
-	if objectKey == "" || ossUploadID == "" {
-		return status.Error(codes.NotFound, "upload_id not found or expired")
-	}
-
-	// 3) 接收 data：你 drogon 那边目前是“meta + data(整块)”，但这里兼容多次 data 分片
-	//    为了避免把大块全部堆内存，用临时文件落盘再上传到 MinIO part。
-	tmp, err := os.CreateTemp("", "mp-part-*")
-	if err != nil {
-		return status.Errorf(codes.Internal, "create temp: %v", err)
-	}
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-
-	var written int64
-	for {
-		in, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return status.Errorf(codes.Canceled, "recv data: %v", err)
-		}
-		b := in.GetData()
-		if len(b) == 0 {
-			continue
-		}
-		n, werr := tmp.Write(b)
-		if werr != nil {
-			return status.Errorf(codes.Internal, "write temp: %v", werr)
-		}
-		written += int64(n)
-	}
-
-	// 4) 校验 size（强烈建议校验：防止 part 丢字节/重传截断）
-	if meta.PartSize > 0 && written != meta.PartSize {
-		return status.Errorf(codes.InvalidArgument, "part_size mismatch: expect=%d got=%d", meta.PartSize, written)
-	}
-
-	// 5) 上传该 part 到 MinIO（PutObjectPart）
-	if _, err := tmp.Seek(0, 0); err != nil {
-		return status.Errorf(codes.Internal, "seek temp: %v", err)
-	}
-
-	etag, err := internal.MinIOClient.MinIOMultipartPutPart(
-		ctx,
-		objectKey,
-		ossUploadID,
-		int(meta.PartNumber),
-		tmp,
-		written,
-		"", // md5Base64：你若需要可在网关算好后传进来
-	)
-	if err != nil {
-		return status.Errorf(codes.Internal, "minio put part: %v", err)
-	}
-
-	// 6) 把 etag 写入 Redis：mp:parts:<upload_id>[partNumber] = etag
-	pk := partsKey(meta.UploadId)
-	if err := internal.RedisClient.HSet(ctx, pk, strconv.Itoa(int(meta.PartNumber)), etag).Err(); err != nil {
-		return status.Errorf(codes.Internal, "redis HSet part etag: %v", err)
-	}
-	_ = internal.RedisClient.HSet(ctx, mk, "status", "uploading").Err()
-
-	// 7) close response
-	return stream.SendAndClose(&UploadPartResp{
-		UploadId:   meta.UploadId,
-		PartNumber: meta.PartNumber,
-		PartSize:   written,
-		Etag:       etag,
-	})
-}
-
-// -------------------- CompleteMultipart（关键改动：改为 MinIO Complete，不做本地合并） --------------------
-func (s FileServer) CompleteMultipart(ctx context.Context, req *CompleteReq) (*CompleteResp, error) {
-	if req == nil || req.UploadId == "" {
+func (s FileServer) PresignParts(ctx context.Context, req *PresignPartsReq) (*PresignPartsResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
 		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
 	}
 
-	mk := metaKey(req.UploadId)
-
-	// 1) 取 meta：object_key / oss_upload_id / total_parts / content_type
-	vals, err := internal.RedisClient.HMGet(ctx, mk, "object_key", "oss_upload_id", "total_parts", "content_type", "status").Result()
+	vals, err := internal.RedisClient.HMGet(ctx, metaKey(req.UploadId), "user_id", "object_key", "oss_upload_id", "total_parts").Result()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
 	}
-	objectKey, _ := vals[0].(string)
-	ossUploadID, _ := vals[1].(string)
-	totalPartsStr := fmt.Sprint(vals[2])
-	contentType, _ := vals[3].(string)
-	statusStr, _ := vals[4].(string)
-
-	if objectKey == "" || ossUploadID == "" {
+	ownerUserID, _ := vals[0].(string)
+	objectKey, _ := vals[1].(string)
+	ossUploadID, _ := vals[2].(string)
+	totalParts, _ := strconv.Atoi(fmt.Sprint(vals[3]))
+	if ownerUserID == "" || objectKey == "" || ossUploadID == "" || totalParts <= 0 {
 		return nil, status.Error(codes.NotFound, "upload_id not found or expired")
 	}
+	if err := ensureMultipartOwner(ctx, ownerUserID); err != nil {
+		return nil, err
+	}
 
-	// 已完成则幂等返回（建议：你可在 meta 存最终 etag/url）
+	resp := &PresignPartsResp{
+		UploadId: req.UploadId,
+		Parts:    make([]*PresignedPart, 0, len(req.PartNumbers)),
+	}
+	expiresAt := time.Now().Add(multipartPresignExpiry).Format(time.RFC3339)
+	for _, partNumber := range req.PartNumbers {
+		if partNumber <= 0 || int(partNumber) > totalParts {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid part_number=%d", partNumber)
+		}
+		u, err := internal.MinIOClient.MinIOPresignMultipartPutURL(ctx, objectKey, ossUploadID, int(partNumber), multipartPresignExpiry)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "presign part %d: %v", partNumber, err)
+		}
+		resp.Parts = append(resp.Parts, &PresignedPart{
+			PartNumber: partNumber,
+			Url:        u,
+			ExpiresAt:  expiresAt,
+		})
+	}
+	sort.Slice(resp.Parts, func(i, j int) bool { return resp.Parts[i].PartNumber < resp.Parts[j].PartNumber })
+	return resp, nil
+}
+
+func (s FileServer) UploadPart(stream FileService_UploadPartServer) error {
+	return status.Error(codes.Unimplemented, "deprecated, use PresignParts + direct multipart upload")
+}
+
+func (s FileServer) CompleteMultipart(ctx context.Context, req *CompleteReq) (*CompleteResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
+	}
+
+	vals, err := internal.RedisClient.HMGet(ctx, metaKey(req.UploadId),
+		"user_id", "file_name", "file_size", "file_hash", "content_type", "object_key", "oss_upload_id", "total_parts", "status").Result()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
+	}
+	userID, _ := vals[0].(string)
+	fileName, _ := vals[1].(string)
+	fileSize, _ := strconv.ParseInt(fmt.Sprint(vals[2]), 10, 64)
+	fileHash, _ := vals[3].(string)
+	contentType, _ := vals[4].(string)
+	objectKey, _ := vals[5].(string)
+	ossUploadID, _ := vals[6].(string)
+	totalParts, _ := strconv.Atoi(fmt.Sprint(vals[7]))
+	statusStr, _ := vals[8].(string)
+	if userID == "" || fileName == "" || fileHash == "" || objectKey == "" || ossUploadID == "" || totalParts <= 0 {
+		return nil, status.Error(codes.NotFound, "upload_id not found or expired")
+	}
+	if err := ensureMultipartOwner(ctx, userID); err != nil {
+		return nil, err
+	}
+
 	if statusStr == "completed" {
+		currentStatus := model.FilePendingScan
+		if file, err := findFileByHash(ctx, fileHash); err == nil && file != nil && file.Status != "" {
+			currentStatus = file.Status
+		}
 		return &CompleteResp{
 			UploadId:  req.UploadId,
 			ObjectKey: objectKey,
-			Status:    "completed",
+			Status:    currentStatus,
 		}, nil
 	}
 
-	totalParts, _ := strconv.Atoi(totalPartsStr)
-	if totalParts <= 0 {
-		return nil, status.Error(codes.Internal, "invalid total_parts in meta")
-	}
-
-	// 2) 从 Redis 拉取所有 part 的 ETag
-	pk := partsKey(req.UploadId)
-	m, err := internal.RedisClient.HGetAll(ctx, pk).Result()
+	parts, err := listUploadedParts(ctx, objectKey, ossUploadID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "redis HGetAll parts: %v", err)
+		return nil, status.Errorf(codes.Internal, "list multipart parts: %v", err)
 	}
-	if len(m) != totalParts {
-		return nil, status.Errorf(codes.FailedPrecondition, "parts not complete: got=%d expect=%d", len(m), totalParts)
+	if len(parts) != totalParts {
+		return nil, status.Errorf(codes.FailedPrecondition, "parts not complete: got=%d expect=%d", len(parts), totalParts)
 	}
 
-	// 3) 组装 []minio.CompletePart（必须包含 PartNumber + ETag）
-	parts := make([]minio.CompletePart, 0, len(m))
-	for k, etag := range m {
-		pn, err := strconv.Atoi(k)
-		if err != nil || pn <= 0 {
-			return nil, status.Errorf(codes.Internal, "invalid part number key=%q", k)
-		}
-		parts = append(parts, minio.CompletePart{
-			PartNumber: pn,
-			ETag:       etag,
+	completeParts := make([]minio.CompletePart, 0, len(parts))
+	for _, part := range parts {
+		completeParts = append(completeParts, minio.CompletePart{
+			PartNumber: part.PartNumber,
+			ETag:       part.ETag,
 		})
 	}
 
-	// 4) 关键改动：调用 MinIO CompleteMultipartUpload（不再本地合并后 PutObject）
-	info, err := internal.MinIOClient.MinIOMultipartComplete(
-		ctx,
-		objectKey,
-		ossUploadID,
-		parts,
-		contentType,
-		nil, // user meta：如果你 init 时写过，也可以这里再传（通常可不传）
-	)
+	info, err := internal.MinIOClient.MinIOMultipartComplete(ctx, objectKey, ossUploadID, completeParts, contentType, nil)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "minio complete multipart: %v", err)
 	}
 
-	// 5) 更新 meta 状态 + 保存最终 etag
-	_ = internal.RedisClient.HSet(ctx, mk, map[string]any{
+	account, err := ensureAccount(ctx, userID)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, err.Error())
+	}
+
+	// requeueScan=false 是有意的：
+	// 1. 新文件首次落库时会在 upsert 内部写 pending_scan + outbox。
+	// 2. 复用 success/pending_scan 对象时不应重复投递扫描。
+	// 3. 复用 scan_failed 对象时，upsert 会在 FileScanFailed 分支内重新排队扫描。
+	file, _, err := upsertFileAndRelation(ctx, account, userID, fileName, fileHash, contentType, objectKey, fileSize, false)
+	if err != nil {
+		_ = internal.MinIOClient.MinIODeleteObject(objectKey)
+		return nil, status.Errorf(codes.Internal, "finalize multipart upload: %v", err)
+	}
+
+	_ = internal.RedisClient.HSet(ctx, metaKey(req.UploadId), map[string]any{
 		"status": "completed",
 		"etag":   info.ETag,
 	}).Err()
 
-	// 6) 返回
 	return &CompleteResp{
 		UploadId:  req.UploadId,
-		ObjectKey: objectKey,
+		ObjectKey: file.ObjectKey,
 		Etag:      info.ETag,
-		Status:    "completed",
+		Status:    file.Status,
 	}, nil
 }
 
-// AbortMultipart：
-// 1) 从 Redis 取出 object_key + minio_upload_id
-// 2) 调 MinIO AbortMultipartUpload 回收未完成分片
-// 3) 删除 Redis 中 meta/parts 状态（幂等：不存在也当成功）
 func (s FileServer) AbortMultipart(ctx context.Context, req *AbortReq) (*AbortResp, error) {
-	if req == nil || req.UploadId == "" {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
 		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
 	}
 
-	mk := metaKey(req.UploadId)
-	pk := partsKey(req.UploadId)
-
-	// 读取 meta（字段名尽量兼容：minio_upload_id / oss_upload_id 二选一）
-	vals, err := internal.RedisClient.HMGet(ctx, mk, "object_key", "minio_upload_id", "oss_upload_id", "status").Result()
+	vals, err := internal.RedisClient.HMGet(ctx, metaKey(req.UploadId), "user_id", "object_key", "oss_upload_id", "status").Result()
 	if err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
 	}
-
-	// meta 不存在：直接当成功（幂等 abort）
-	if len(vals) == 0 || (vals[0] == nil && vals[1] == nil && vals[2] == nil) {
-		_ = internal.RedisClient.Del(ctx, mk, pk).Err()
+	if len(vals) == 0 || (vals[0] == nil && vals[1] == nil) {
+		_ = internal.RedisClient.Del(ctx, metaKey(req.UploadId)).Err()
 		return &AbortResp{}, nil
 	}
 
-	objectKey, _ := vals[0].(string)
-
-	minioUploadID, _ := vals[1].(string)
-	if minioUploadID == "" {
-		minioUploadID, _ = vals[2].(string) // oss_upload_id 兼容
-	}
-
+	ownerUserID, _ := vals[0].(string)
+	objectKey, _ := vals[1].(string)
+	ossUploadID, _ := vals[2].(string)
 	statusStr, _ := vals[3].(string)
-
-	// 如果已经 completed，你可以选择拒绝 abort；这里采取“已完成则只清理 redis，不回收 minio”
-	if statusStr != "completed" && objectKey != "" && minioUploadID != "" {
-		// 回收 MinIO multipart（避免残留未完成 upload 占用资源）
-		if internal.MinIOClient != nil { // internal.MinIOClient 是全局变量 :contentReference[oaicite:1]{index=1}
-			_ = internal.MinIOClient.MinIOMultipartAbort(ctx, objectKey, minioUploadID)
-			// Abort 失败一般不影响继续清理 Redis（可按你风格改为强校验）
-		}
+	if ownerUserID == "" {
+		return nil, status.Error(codes.NotFound, "upload_id not found or expired")
 	}
-
-	// 删除 Redis 状态（meta + parts）
-	_ = internal.RedisClient.Del(ctx, mk, pk).Err()
-
+	if err := ensureMultipartOwner(ctx, ownerUserID); err != nil {
+		return nil, err
+	}
+	if statusStr != "completed" && objectKey != "" && ossUploadID != "" {
+		_ = internal.MinIOClient.MinIOMultipartAbort(ctx, objectKey, ossUploadID)
+	}
+	_ = internal.RedisClient.Del(ctx, metaKey(req.UploadId)).Err()
 	return &AbortResp{}, nil
 }
 
-// Status：
-// 1) 读取 total_parts
-// 2) 读取已上传 part 列表（从 parts hash 的 field 里拿到 part_number）
-// 3) 返回 uploaded_parts（升序）
 func (s FileServer) Status(ctx context.Context, req *StatusReq) (*StatusResp, error) {
-	if req == nil || req.UploadId == "" {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
 		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
 	}
 
-	mk := metaKey(req.UploadId)
-	pk := partsKey(req.UploadId)
-
-	// total_parts
-	totalStr, err := internal.RedisClient.HGet(ctx, mk, "total_parts").Result()
-	if err == redis.Nil {
+	vals, err := internal.RedisClient.HMGet(ctx, metaKey(req.UploadId), "user_id", "object_key", "oss_upload_id", "total_parts").Result()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
+	}
+	ownerUserID, _ := vals[0].(string)
+	objectKey, _ := vals[1].(string)
+	ossUploadID, _ := vals[2].(string)
+	totalParts, _ := strconv.Atoi(fmt.Sprint(vals[3]))
+	if ownerUserID == "" || objectKey == "" || ossUploadID == "" || totalParts <= 0 {
 		return nil, status.Error(codes.NotFound, "upload_id not found or expired")
 	}
+	if err := ensureMultipartOwner(ctx, ownerUserID); err != nil {
+		return nil, err
+	}
+
+	parts, err := listUploadedParts(ctx, objectKey, ossUploadID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "redis HGet total_parts: %v", err)
+		return nil, status.Errorf(codes.Internal, "list multipart parts: %v", err)
 	}
-	totalParts64, err := strconv.ParseInt(totalStr, 10, 32)
-	if err != nil || totalParts64 < 0 {
-		return nil, status.Errorf(codes.Internal, "invalid total_parts=%q", totalStr)
+	uploaded := make([]int32, 0, len(parts))
+	for _, part := range parts {
+		uploaded = append(uploaded, int32(part.PartNumber))
 	}
-
-	// 已上传 parts：hash 的 field 是 partNumber，value 是 etag
-	keys, err := internal.RedisClient.HKeys(ctx, pk).Result()
-	if err != nil && err != redis.Nil {
-		return nil, status.Errorf(codes.Internal, "redis HKeys parts: %v", err)
-	}
-
-	uploaded := make([]int32, 0, len(keys))
-	for _, k := range keys {
-		pn, err := strconv.ParseInt(k, 10, 32)
-		if err != nil || pn <= 0 {
-			// 防御：跳过非法 field
-			continue
-		}
-		uploaded = append(uploaded, int32(pn))
-	}
-
-	sort.Slice(uploaded, func(i, j int) bool { return uploaded[i] < uploaded[j] })
 
 	return &StatusResp{
-		TotalParts:    int32(totalParts64),
+		TotalParts:    int32(totalParts),
 		UploadedParts: uploaded,
 	}, nil
-}
-
-func (f FileServer) mustEmbedUnimplementedFileServiceServer() {
-
-	panic("implement me")
 }

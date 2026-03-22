@@ -24,10 +24,182 @@ mkdir -p "$LOG_DIR"
 PID_DIR="$PROJECT_ROOT/.pids"
 mkdir -p "$PID_DIR"
 
+K8S_NAMESPACE="infra"
+K8S_SCRIPT="/home/lihaoqian/project/k8s/bin/k8s-stack.sh"
+NACOS_SQL="$PROJECT_ROOT/scripts/sql/nacos-3.1.sql"
+NGINX_MODE_FILE="$PID_DIR/nginx.mode"
+DOCKER_OPENRESTY_IMAGE="${DOCKER_OPENRESTY_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/uusec/openresty-manager:latest}"
+DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
+CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
+
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 一键启动脚本${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
+
+http_health_ok() {
+    local url="$1"
+    no_proxy="*" curl -fsS -m 3 "$url" > /dev/null 2>&1
+}
+
+http_status_ok() {
+    local url="$1"
+    local expected_regex="$2"
+    local status_code
+
+    status_code=$(no_proxy="*" curl -sS -m 3 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)
+    [[ "$status_code" =~ $expected_regex ]]
+}
+
+tcp_port_open() {
+    local host="$1"
+    local port="$2"
+    timeout 2 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null
+}
+
+service_pid_running() {
+    local service_name="$1"
+    local pid_file="$PID_DIR/${service_name}.pid"
+    local pid=""
+
+    if [ ! -f "$pid_file" ]; then
+        return 1
+    fi
+
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    if [ -z "$pid" ]; then
+        return 1
+    fi
+
+    ps -p "$pid" > /dev/null 2>&1
+}
+
+port_listening() {
+    local port="$1"
+    if command -v ss > /dev/null 2>&1; then
+        ss -ltn 2>/dev/null | grep -q ":${port}\\b"
+        return
+    fi
+    netstat -ltn 2>/dev/null | grep -q ":${port} "
+}
+
+listening_pid_for_port() {
+    local port="$1"
+
+    if command -v lsof > /dev/null 2>&1; then
+        lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -1
+        return
+    fi
+
+    if command -v ss > /dev/null 2>&1; then
+        ss -ltnp 2>/dev/null | awk -v port=":${port}" '$4 ~ port { if (match($NF, /pid=([0-9]+)/, m)) { print m[1]; exit } }'
+    fi
+}
+
+k8s_openresty_running() {
+    if ! k8s_available; then
+        return 1
+    fi
+
+    kubectl get pods -n "$K8S_NAMESPACE" -l app=openresty --no-headers 2>/dev/null \
+        | awk '{split($2, ready, "/"); if (ready[1] == ready[2] && $3 == "Running") found=1} END {exit found ? 0 : 1}'
+}
+
+text_matches() {
+    local pattern="$1"
+    if command -v rg > /dev/null 2>&1; then
+        rg -q "$pattern"
+    else
+        grep -Eq "$pattern"
+    fi
+}
+
+nacos_health_ok() {
+    http_health_ok "http://127.0.0.1:30848/nacos/" || http_status_ok "http://127.0.0.1:30880/v3/console/health/liveness" '^(200)$'
+}
+
+k8s_available() {
+    command -v kubectl &> /dev/null && kubectl get namespace "$K8S_NAMESPACE" > /dev/null 2>&1
+}
+
+print_k8s_pod_status() {
+    local app_name="$1"
+    local pod_table
+
+    pod_table=$(kubectl get pods -n "$K8S_NAMESPACE" -l "app=${app_name}" --no-headers 2>/dev/null || true)
+    if [ -n "$pod_table" ]; then
+        echo -e "${YELLOW}    K8s Pod 状态:${NC}"
+        echo "$pod_table" | sed 's/^/      /'
+    else
+        echo -e "${YELLOW}    K8s: 未发现 app=${app_name} 的 Pod${NC}"
+    fi
+}
+
+print_k8s_service_status() {
+    local service_name="$1"
+    local service_table endpoints
+
+    service_table=$(kubectl get svc -n "$K8S_NAMESPACE" "$service_name" --no-headers 2>/dev/null || true)
+    if [ -n "$service_table" ]; then
+        echo -e "${YELLOW}    K8s Service:${NC}"
+        echo "$service_table" | sed 's/^/      /'
+    fi
+
+    endpoints=$(kubectl get endpoints -n "$K8S_NAMESPACE" "$service_name" -o jsonpath='{range .subsets[*]}{range .addresses[*]}{.ip}{":"}{range $.subsets[*].ports[*]}{.port}{" "}{end}{end}{end}' 2>/dev/null || true)
+    if [ -n "$endpoints" ]; then
+        echo -e "${YELLOW}    Endpoints: ${endpoints}${NC}"
+    else
+        echo -e "${YELLOW}    Endpoints: 无可用后端${NC}"
+    fi
+}
+
+diagnose_nacos() {
+    if ! k8s_available; then
+        return
+    fi
+
+    print_k8s_pod_status "nacos"
+    print_k8s_service_status "nacos"
+
+    local nacos_logs
+    nacos_logs=$(kubectl logs -n "$K8S_NAMESPACE" deployment/nacos --tail=80 2>/dev/null || true)
+    if echo "$nacos_logs" | text_matches "Unknown database 'nacos_config'|db-load-error"; then
+        echo -e "${RED}    根因: Nacos MySQL 库未初始化，缺少数据库 nacos_config${NC}"
+        echo -e "${YELLOW}    修复步骤:${NC}"
+        echo -e "      mysql -h127.0.0.1 -P30306 -uroot -p123456 < $NACOS_SQL"
+        echo -e "      $K8S_SCRIPT stop nacos"
+        echo -e "      $K8S_SCRIPT start nacos"
+        return
+    fi
+
+    echo -e "${YELLOW}    排查命令:${NC}"
+    echo -e "      kubectl logs -n $K8S_NAMESPACE deployment/nacos --tail=80"
+    echo -e "      kubectl describe pod -n $K8S_NAMESPACE -l app=nacos"
+}
+
+diagnose_consul() {
+    if ! k8s_available; then
+        return
+    fi
+
+    print_k8s_pod_status "consul"
+    print_k8s_service_status "consul-ui"
+
+    local consul_logs
+    consul_logs=$(kubectl logs -n "$K8S_NAMESPACE" statefulset/consul --tail=80 2>/dev/null || true)
+    if echo "$consul_logs" | text_matches "server_rejoin_age_max"; then
+        echo -e "${RED}    根因: Consul 数据目录过旧，超过 server_rejoin_age_max，拒绝重新加入${NC}"
+        echo -e "${YELLOW}    修复步骤(开发环境):${NC}"
+        echo -e "      $K8S_SCRIPT stop consul"
+        echo -e "      kubectl delete pvc -n $K8S_NAMESPACE consul-data-consul-0"
+        echo -e "      $K8S_SCRIPT start consul"
+        return
+    fi
+
+    echo -e "${YELLOW}    排查命令:${NC}"
+    echo -e "      kubectl logs -n $K8S_NAMESPACE statefulset/consul --tail=80"
+    echo -e "      kubectl get svc,endpoints -n $K8S_NAMESPACE consul-ui"
+}
 
 # 检查基础设施服务
 check_infrastructure() {
@@ -36,23 +208,25 @@ check_infrastructure() {
     INFRA_OK=true
 
     # 检查 Nacos
-    if no_proxy="*" curl -s http://127.0.0.1:30848/nacos/v1/console/health/liveness > /dev/null 2>&1; then
+    if nacos_health_ok; then
         echo -e "${GREEN}  ✓ Nacos (127.0.0.1:30848)${NC}"
     else
-        echo -e "${RED}  ✗ Nacos 未运行 (127.0.0.1:30848)${NC}"
+        echo -e "${RED}  ✗ Nacos 不可用 (127.0.0.1:30848)${NC}"
+        diagnose_nacos
         INFRA_OK=false
     fi
 
     # 检查 Consul
-    if no_proxy="*" curl -s http://127.0.0.1:30500/v1/status/leader > /dev/null 2>&1; then
+    if http_health_ok "http://127.0.0.1:30500/v1/status/leader"; then
         echo -e "${GREEN}  ✓ Consul (127.0.0.1:30500)${NC}"
     else
-        echo -e "${RED}  ✗ Consul 未运行 (127.0.0.1:30500)${NC}"
+        echo -e "${RED}  ✗ Consul 不可用 (127.0.0.1:30500)${NC}"
+        diagnose_consul
         INFRA_OK=false
     fi
 
     # 检查 MySQL
-    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/30306" 2>/dev/null; then
+    if tcp_port_open "127.0.0.1" "30306"; then
         echo -e "${GREEN}  ✓ MySQL (127.0.0.1:30306)${NC}"
     else
         echo -e "${RED}  ✗ MySQL 未运行 (127.0.0.1:30306)${NC}"
@@ -60,7 +234,7 @@ check_infrastructure() {
     fi
 
     # 检查 Redis
-    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/31029" 2>/dev/null; then
+    if tcp_port_open "127.0.0.1" "31029"; then
         echo -e "${GREEN}  ✓ Redis (127.0.0.1:31029)${NC}"
     else
         echo -e "${RED}  ✗ Redis 未运行 (127.0.0.1:31029)${NC}"
@@ -68,7 +242,7 @@ check_infrastructure() {
     fi
 
     # 检查 Kafka
-    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/31092" 2>/dev/null; then
+    if tcp_port_open "127.0.0.1" "31092"; then
         echo -e "${GREEN}  ✓ Kafka (127.0.0.1:31092)${NC}"
     else
         echo -e "${RED}  ✗ Kafka 未运行 (127.0.0.1:31092)${NC}"
@@ -76,7 +250,7 @@ check_infrastructure() {
     fi
 
     # 检查 MinIO
-    if no_proxy="*" curl -s http://127.0.0.1:30900 > /dev/null 2>&1; then
+    if http_health_ok "http://127.0.0.1:30900/minio/health/live"; then
         echo -e "${GREEN}  ✓ MinIO (127.0.0.1:30900)${NC}"
     else
         echo -e "${YELLOW}  ⚠ MinIO 未运行 (127.0.0.1:30900)${NC}"
@@ -84,16 +258,16 @@ check_infrastructure() {
 
     if [ "$INFRA_OK" = false ]; then
         echo ""
-        echo -e "${RED}错误: 部分基础设施服务未运行！${NC}"
-        echo -e "${YELLOW}请先启动 K3s 中的基础设施服务：${NC}"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy mysql"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy redis"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy minio"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy consul"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy zookeeper"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy kafka"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh deploy nacos"
-        echo -e "  /home/lihaoqian/project/k8s/bin/k8s-stack.sh status clouddisk_v2"
+        echo -e "${RED}错误: 部分基础设施服务不可用！${NC}"
+        echo -e "${YELLOW}如果组件尚未部署，可执行：${NC}"
+        echo -e "  $K8S_SCRIPT deploy mysql"
+        echo -e "  $K8S_SCRIPT deploy redis"
+        echo -e "  $K8S_SCRIPT deploy minio"
+        echo -e "  $K8S_SCRIPT deploy consul"
+        echo -e "  $K8S_SCRIPT deploy zookeeper"
+        echo -e "  $K8S_SCRIPT deploy kafka"
+        echo -e "  $K8S_SCRIPT deploy nacos"
+        echo -e "  $K8S_SCRIPT status clouddisk_v2"
         echo ""
         exit 1
     fi
@@ -114,12 +288,23 @@ check_dependencies() {
 
     # 检查 OpenResty 或 Nginx
     NGINX_BIN=""
+    NGINX_RUNTIME=""
     if command -v openresty &> /dev/null; then
         NGINX_BIN="openresty"
+        NGINX_RUNTIME="local"
         echo -e "${GREEN}  ✓ OpenResty: $(openresty -v 2>&1 | head -1)${NC}"
     elif command -v nginx &> /dev/null; then
         NGINX_BIN="nginx"
+        NGINX_RUNTIME="local"
         echo -e "${GREEN}  ✓ Nginx: $(nginx -v 2>&1)${NC}"
+    elif k8s_openresty_running; then
+        NGINX_RUNTIME="k8s"
+        echo -e "${GREEN}  ✓ OpenResty/Nginx 已由 K8s 接管${NC}"
+        echo -e "${GREEN}    Pod: $(kubectl get pods -n "$K8S_NAMESPACE" -l app=openresty -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)${NC}"
+    elif command -v docker &> /dev/null; then
+        NGINX_RUNTIME="docker"
+        echo -e "${YELLOW}  ⚠ 未找到本机 OpenResty/Nginx，将使用 Docker 镜像启动反向代理${NC}"
+        echo -e "${GREEN}    镜像: ${DOCKER_OPENRESTY_IMAGE}${NC}"
     else
         echo -e "${YELLOW}  ⚠ 未找到 OpenResty/Nginx，将跳过反向代理启动${NC}"
     fi
@@ -137,6 +322,12 @@ check_dependencies() {
         echo -e "${GREEN}  ✓ Node.js: $(node -v)${NC}"
     else
         echo -e "${YELLOW}  ⚠ 未找到 Node.js，将跳过前端启动${NC}"
+    fi
+
+    if command -v clamd &> /dev/null; then
+        echo -e "${GREEN}  ✓ ClamAV: $(clamd --version | head -1)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 未找到 clamd，大文件病毒扫描将不可用${NC}"
     fi
 
     echo ""
@@ -167,8 +358,11 @@ build_cpp_gateway() {
 
 # 启动 OpenResty/Nginx
 start_nginx() {
-    if [ -z "$NGINX_BIN" ]; then
+    if [ -z "${NGINX_RUNTIME:-}" ] || [ "$NGINX_RUNTIME" = "k8s" ]; then
         echo -e "${YELLOW}[2/7] 跳过 OpenResty/Nginx 启动${NC}"
+        if [ "${NGINX_RUNTIME:-}" = "k8s" ]; then
+            echo -e "${GREEN}  ✓ K8s OpenResty 已在运行，继续使用现有实例${NC}"
+        fi
         echo ""
         return
     fi
@@ -186,13 +380,41 @@ start_nginx() {
     # 更新配置文件中的路径（如果需要）
     sed -i "s|/home/lihaoqian/myproject/clouddisk_v2|$PROJECT_ROOT|g" "$NGINX_CONF"
 
-    # 启动 Nginx
-    $NGINX_BIN -c "$NGINX_CONF" -p "$PROJECT_ROOT/forward_part/config/nginx/"
+    rm -f "$NGINX_MODE_FILE"
 
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}  ✓ OpenResty/Nginx 已启动${NC}"
+    if [ "$NGINX_RUNTIME" = "docker" ]; then
+        docker image inspect "$DOCKER_OPENRESTY_IMAGE" > /dev/null 2>&1 || docker pull "$DOCKER_OPENRESTY_IMAGE"
+        docker rm -f "$DOCKER_OPENRESTY_CONTAINER" > /dev/null 2>&1 || true
+
+        docker run -d \
+            --name "$DOCKER_OPENRESTY_CONTAINER" \
+            --network host \
+            -v "$PROJECT_ROOT:$PROJECT_ROOT" \
+            --entrypoint openresty \
+            "$DOCKER_OPENRESTY_IMAGE" \
+            -c "$NGINX_CONF" \
+            -p "$PROJECT_ROOT/forward_part/config/nginx/" \
+            -g "daemon off;" > /dev/null
+
+        sleep 2
+
+        if [ "$(docker inspect -f '{{.State.Running}}' "$DOCKER_OPENRESTY_CONTAINER" 2>/dev/null || true)" = "true" ]; then
+            echo "docker" > "$NGINX_MODE_FILE"
+            echo -e "${GREEN}  ✓ OpenResty/Nginx 已通过 Docker 启动${NC}"
+            echo -e "${GREEN}    容器: $DOCKER_OPENRESTY_CONTAINER${NC}"
+        else
+            echo -e "${RED}  ✗ OpenResty/Nginx Docker 启动失败${NC}"
+            docker logs --tail 40 "$DOCKER_OPENRESTY_CONTAINER" 2>&1 | sed 's/^/    /' || true
+        fi
     else
-        echo -e "${RED}  ✗ OpenResty/Nginx 启动失败${NC}"
+        # 启动本机 Nginx/OpenResty
+        $NGINX_BIN -c "$NGINX_CONF" -p "$PROJECT_ROOT/forward_part/config/nginx/"
+        if [ $? -eq 0 ]; then
+            echo "local" > "$NGINX_MODE_FILE"
+            echo -e "${GREEN}  ✓ OpenResty/Nginx 已启动${NC}"
+        else
+            echo -e "${RED}  ✗ OpenResty/Nginx 启动失败${NC}"
+        fi
     fi
 
     echo ""
@@ -201,6 +423,12 @@ start_nginx() {
 # 启动 C++ Gateway
 start_cpp_gateway() {
     echo -e "${YELLOW}[3/7] 启动 C++ Gateway...${NC}"
+
+    if service_pid_running "gateway"; then
+        echo -e "${GREEN}  ✓ C++ Gateway 已在运行，跳过重复启动${NC}"
+        echo ""
+        return
+    fi
 
     GATEWAY_BIN="$PROJECT_ROOT/forward_part/gateway/build/gateway"
     GATEWAY_CONFIG="$PROJECT_ROOT/forward_part/gateway/config.json"
@@ -244,51 +472,88 @@ start_cpp_gateway() {
 start_go_services() {
     echo -e "${YELLOW}[4/7] 启动 Go 微服务...${NC}"
 
+    if [ -x "$CLAMD_HELPER" ] && command -v clamd > /dev/null 2>&1; then
+        echo -e "  启动 clamd_local..."
+        "$CLAMD_HELPER" start | sed 's/^/    /'
+    fi
+
     # Account Service
-    echo -e "  启动 account_srv..."
-    cd "$PROJECT_ROOT"
-    nohup go run ./backword_part/account_server/account_srv/ > "$LOG_DIR/account_srv.log" 2>&1 &
-    ACCOUNT_PID=$!
-    echo $ACCOUNT_PID > "$PID_DIR/account_srv.pid"
-    echo -e "${GREEN}    ✓ account_srv (PID: $ACCOUNT_PID)${NC}"
+    if service_pid_running "account_srv"; then
+        echo -e "${GREEN}  ✓ account_srv 已在运行，跳过重复启动${NC}"
+    else
+        echo -e "  启动 account_srv..."
+        cd "$PROJECT_ROOT"
+        nohup go run ./backword_part/account_server/account_srv/ > "$LOG_DIR/account_srv.log" 2>&1 &
+        ACCOUNT_PID=$!
+        echo $ACCOUNT_PID > "$PID_DIR/account_srv.pid"
+        echo -e "${GREEN}    ✓ account_srv (PID: $ACCOUNT_PID)${NC}"
+    fi
 
     sleep 2
 
     # File Service
-    echo -e "  启动 file_srv..."
-    nohup go run ./backword_part/file_server/file_srv/ > "$LOG_DIR/file_srv.log" 2>&1 &
-    FILE_PID=$!
-    echo $FILE_PID > "$PID_DIR/file_srv.pid"
-    echo -e "${GREEN}    ✓ file_srv (PID: $FILE_PID)${NC}"
+    if service_pid_running "file_srv"; then
+        echo -e "${GREEN}  ✓ file_srv 已在运行，跳过重复启动${NC}"
+    else
+        echo -e "  启动 file_srv..."
+        nohup go run ./backword_part/file_server/file_srv/ > "$LOG_DIR/file_srv.log" 2>&1 &
+        FILE_PID=$!
+        echo $FILE_PID > "$PID_DIR/file_srv.pid"
+        echo -e "${GREEN}    ✓ file_srv (PID: $FILE_PID)${NC}"
+    fi
 
     sleep 2
 
     # Store Service
-    echo -e "  启动 store_srv..."
-    nohup go run ./other_srv/store_srv/ > "$LOG_DIR/store_srv.log" 2>&1 &
-    STORE_PID=$!
-    echo $STORE_PID > "$PID_DIR/store_srv.pid"
-    echo -e "${GREEN}    ✓ store_srv (PID: $STORE_PID)${NC}"
+    if service_pid_running "store_srv"; then
+        echo -e "${GREEN}  ✓ store_srv 已在运行，跳过重复启动${NC}"
+    else
+        echo -e "  启动 store_srv..."
+        nohup go run ./other_srv/store_srv/ > "$LOG_DIR/store_srv.log" 2>&1 &
+        STORE_PID=$!
+        echo $STORE_PID > "$PID_DIR/store_srv.pid"
+        echo -e "${GREEN}    ✓ store_srv (PID: $STORE_PID)${NC}"
+    fi
 
     sleep 2
 
     # AI Service (可选)
     if [ -f "./backword_part/AI_server/main.go" ]; then
-        echo -e "  启动 AI_srv..."
-        nohup go run ./backword_part/AI_server/ > "$LOG_DIR/ai_srv.log" 2>&1 &
-        AI_PID=$!
-        echo $AI_PID > "$PID_DIR/ai_srv.pid"
-        echo -e "${GREEN}    ✓ AI_srv (PID: $AI_PID)${NC}"
+        if service_pid_running "ai_srv"; then
+            echo -e "${GREEN}  ✓ AI_srv 已在运行，跳过重复启动${NC}"
+        else
+            echo -e "  启动 AI_srv..."
+            nohup go run ./backword_part/AI_server/ > "$LOG_DIR/ai_srv.log" 2>&1 &
+            AI_PID=$!
+            echo $AI_PID > "$PID_DIR/ai_srv.pid"
+            echo -e "${GREEN}    ✓ AI_srv (PID: $AI_PID)${NC}"
+        fi
         sleep 1
     fi
 
     # MCP Service (可选)
     if [ -f "./backword_part/mcp_server/main.go" ]; then
-        echo -e "  启动 mcp_srv..."
-        nohup go run ./backword_part/mcp_server/ > "$LOG_DIR/mcp_srv.log" 2>&1 &
-        MCP_PID=$!
-        echo $MCP_PID > "$PID_DIR/mcp_srv.pid"
-        echo -e "${GREEN}    ✓ mcp_srv (PID: $MCP_PID)${NC}"
+        if service_pid_running "mcp_srv"; then
+            echo -e "${GREEN}  ✓ mcp_srv 已在运行，跳过重复启动${NC}"
+        elif port_listening "50053"; then
+            MCP_PID=$(listening_pid_for_port "50053")
+            if [ -n "${MCP_PID:-}" ]; then
+                echo "$MCP_PID" > "$PID_DIR/mcp_srv.pid"
+            fi
+            echo -e "${YELLOW}  ⚠ 端口 50053 已被占用，跳过 mcp_srv 重复启动${NC}"
+        else
+            echo -e "  启动 mcp_srv..."
+            nohup go run ./backword_part/mcp_server/ > "$LOG_DIR/mcp_srv.log" 2>&1 &
+            MCP_PID=$!
+            echo $MCP_PID > "$PID_DIR/mcp_srv.pid"
+            sleep 1
+            MCP_LISTEN_PID=$(listening_pid_for_port "50053")
+            if [ -n "${MCP_LISTEN_PID:-}" ]; then
+                echo "$MCP_LISTEN_PID" > "$PID_DIR/mcp_srv.pid"
+                MCP_PID="$MCP_LISTEN_PID"
+            fi
+            echo -e "${GREEN}    ✓ mcp_srv (PID: $MCP_PID)${NC}"
+        fi
         sleep 1
     fi
 
@@ -301,6 +566,12 @@ start_frontend() {
 
     if ! command -v npm &> /dev/null; then
         echo -e "${YELLOW}  跳过前端启动 (未安装 Node.js)${NC}"
+        echo ""
+        return
+    fi
+
+    if service_pid_running "frontend"; then
+        echo -e "${GREEN}  ✓ React 前端已在运行，跳过重复启动${NC}"
         echo ""
         return
     fi
@@ -355,7 +626,17 @@ show_status() {
     done
 
     # 检查 Nginx
-    if [ ! -z "$NGINX_BIN" ]; then
+    if [ "${NGINX_RUNTIME:-}" = "k8s" ]; then
+        if k8s_openresty_running; then
+            echo -e "${GREEN}  ✓ OpenResty/Nginx (K8s) - 运行中${NC}"
+        else
+            echo -e "${RED}  ✗ OpenResty/Nginx (K8s) - 未运行${NC}"
+        fi
+    elif [ "${NGINX_RUNTIME:-}" = "docker" ]; then
+        if [ "$(docker inspect -f '{{.State.Running}}' "$DOCKER_OPENRESTY_CONTAINER" 2>/dev/null || true)" = "true" ]; then
+            echo -e "${GREEN}  ✓ OpenResty/Nginx (Docker: $DOCKER_OPENRESTY_CONTAINER) - 运行中${NC}"
+        fi
+    elif [ ! -z "${NGINX_BIN:-}" ]; then
         NGINX_PID_FILE="$PROJECT_ROOT/forward_part/config/nginx/nginx.pid"
         if [ -f "$NGINX_PID_FILE" ]; then
             NGINX_PID=$(cat "$NGINX_PID_FILE")
@@ -363,6 +644,10 @@ show_status() {
                 echo -e "${GREEN}  ✓ OpenResty/Nginx (PID: $NGINX_PID) - 运行中${NC}"
             fi
         fi
+    fi
+
+    if [ -x "$CLAMD_HELPER" ]; then
+        "$CLAMD_HELPER" status 2>/dev/null | sed 's/^/  /'
     fi
 
     echo ""

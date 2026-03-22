@@ -4,24 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go_test/backword_part/model"
 
 	"github.com/IBM/sarama"
 )
 
-const Topic = "alioss"
+const Topic = model.FileUploadEventTopic
 
 type KafkaConfig struct {
 	Host string `mapstructure:"host"`
 	Port string `mapstructure:"port"`
 }
 
-type FileUploadMsg struct {
-	Code    int    `json:"code"`
-	Sha1    string `json:"sha1"`
-	Size    int64  `json:"size"`
-	Content []byte `json:"content"`
-	Type    string `json:"type"`
-}
+type FileUploadMsg = model.FileEventPayload
 
 var KafkaProducer sarama.SyncProducer
 
@@ -53,7 +48,7 @@ func ProduceFileUploadMsg(ctx context.Context, topic string, msg FileUploadMsg) 
 
 	kafkaMsg := &sarama.ProducerMessage{
 		Topic: topic,
-		Key:   sarama.StringEncoder(msg.Sha1), // 用 sha1 做 key，方便按文件分区
+		Key:   sarama.StringEncoder(msg.Sha1),
 		Value: sarama.ByteEncoder(payload),
 	}
 

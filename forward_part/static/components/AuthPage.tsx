@@ -34,6 +34,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
           password: formData.password, 
           email: formData.email 
         });
+        await api.sendCode(formData.email);
         setMode('verify');
       } else if (mode === 'verify') {
         await api.verifyCode(formData.email, formData.code);
@@ -51,7 +52,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
     try {
       setLoading(true);
       await api.sendCode(formData.email);
-      alert('Security beacon transmitted.');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -72,7 +72,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
           </div>
           <h1 className="text-4xl font-bold tracking-tighter neon-text uppercase">NOVA STORAGE</h1>
           <p className="text-slate-500 mt-2 text-xs font-mono uppercase tracking-widest">
-            {mode === 'signin' ? 'System Access Protocol' : mode === 'signup' ? 'Entity Initialization' : 'Verification Sequence'}
+            {mode === 'signin' ? 'Sign in to your account' : mode === 'signup' ? 'Create your account' : 'Enter verification code'}
           </p>
         </div>
 
@@ -127,6 +127,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
 
           {mode === 'verify' && (
             <div className="space-y-5">
+              <div className="text-center">
+                <p className="text-green-400 text-xs font-mono">
+                  Code sent to <span className="text-white font-bold">{formData.email}</span>
+                </p>
+              </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-blue-500 uppercase px-1 tracking-widest">Identifier</label>
                 <input
@@ -137,24 +142,16 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-blue-500 uppercase px-1 tracking-widest">Signal_Code</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="SEC_CODE"
-                    className={inputClasses}
-                    value={formData.code}
-                    onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSendCode}
-                    className="px-6 glass-panel rounded-xl hover:bg-white/10 text-xs font-bold transition uppercase"
-                  >
-                    Ping
-                  </button>
-                </div>
+                <label className="text-[10px] font-black text-blue-500 uppercase px-1 tracking-widest">Verification_Code</label>
+                <input
+                  type="text"
+                  placeholder="Enter 6-digit code"
+                  className={inputClasses}
+                  value={formData.code}
+                  onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                  maxLength={6}
+                  required
+                />
               </div>
             </div>
           )}
@@ -164,15 +161,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess, theme }) => {
             disabled={loading}
             className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-blue-500 transition-all disabled:opacity-50 neon-border shadow-blue-600/20 active:scale-[0.98]"
           >
-            {loading ? 'Initializing...' : mode === 'signin' ? 'Establish Connection' : mode === 'signup' ? 'Create Entity' : 'Authenticate'}
+            {loading ? 'Processing...' : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Verify'}
           </button>
         </form>
 
         <div className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">
           {mode === 'signin' ? (
-            <p>New Entity? <button onClick={() => setMode('signup')} className="text-blue-500 hover:underline">Register Nexus</button></p>
+            <p>New user? <button onClick={() => setMode('signup')} className="text-blue-500 hover:underline">Create Account</button></p>
+          ) : mode === 'signup' ? (
+            <p>Already have an account? <button onClick={() => setMode('signin')} className="text-blue-500 hover:underline">Sign In</button></p>
           ) : (
-            <p>Existing Entity? <button onClick={() => setMode('signin')} className="text-blue-500 hover:underline">Return to Hub</button></p>
+            <p>Didn't receive it? <button onClick={handleSendCode} className="text-blue-500 hover:underline">Resend</button></p>
           )}
         </div>
       </div>

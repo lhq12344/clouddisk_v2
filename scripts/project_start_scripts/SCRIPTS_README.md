@@ -17,6 +17,8 @@
 
 **功能：**
 - 自动检查依赖 (Go, OpenResty/Nginx, Node.js)
+- 基础设施检查失败时输出 Kubernetes 侧诊断信息
+- 本机缺少 OpenResty/Nginx 但存在 Docker 时，自动使用 OpenResty 容器启动反向代理
 - 如果 C++ Gateway 未编译，自动编译
 - 按顺序启动所有服务
 - 将日志输出到 `log/` 目录
@@ -111,6 +113,9 @@ cat forward_part/config/nginx/nginx.conf
 
 确保路径已更新为当前项目路径。
 
+如果本机没有安装 OpenResty/Nginx，但安装了 Docker，启动脚本会自动回退到：
+`swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/uusec/openresty-manager:latest`
+
 ### 2. C++ Gateway 编译失败
 
 检查依赖：
@@ -148,6 +153,26 @@ netstat -tuln | grep -E "2024|3000|8080"
 ```
 
 停止占用端口的进程或修改配置文件中的端口。
+
+### 6. Nacos 报 `Unknown database 'nacos_config'`
+
+这是 Nacos 元数据库没有初始化，不是单纯端口没开。
+
+```bash
+mysql -h127.0.0.1 -P30306 -uroot -p123456 < /home/lihaoqian/project/clouddisk_v2/scripts/sql/nacos-3.1.sql
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh stop nacos
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh start nacos
+```
+
+### 7. Consul 报 `server_rejoin_age_max`
+
+这是旧数据目录导致的拒绝重连。开发环境可以直接重建数据卷：
+
+```bash
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh stop consul
+kubectl delete pvc -n infra consul-data-consul-0
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh start consul
+```
 
 ## 日志查看
 
@@ -197,3 +222,4 @@ openresty -c forward_part/config/nginx/nginx.conf -p forward_part/config/nginx/
 ## 更新日志
 
 - 2026-03-04: 初始版本，支持一键启动/停止/状态查看
+- 2026-03-22: 基础设施检查补充 K8s 诊断，明确 Nacos/Consul 常见故障修复步骤

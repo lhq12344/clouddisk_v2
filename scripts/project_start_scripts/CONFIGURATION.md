@@ -91,22 +91,28 @@ kubectl get pods -n infra
 
 **症状：** 服务启动失败，日志显示 Nacos 连接错误
 
-**原因：** Nacos 未运行或配置错误
+**原因：** Nacos 未运行、配置错误，或 MySQL 中尚未初始化 `nacos_config` 库
 
 **解决：**
 ```bash
 # 检查 Nacos 状态
 kubectl get pods -n infra | grep nacos
 
-# 测试 Nacos 连接
-curl http://127.0.0.1:30848/nacos/v1/console/health/liveness
+# 测试 Nacos 连接（Nacos 3.x）
+curl http://127.0.0.1:30848/nacos/
+curl http://127.0.0.1:30880/v3/console/health/liveness
+
+# 如果日志出现 Unknown database 'nacos_config'
+mysql -h127.0.0.1 -P30306 -uroot -p123456 < /home/lihaoqian/project/clouddisk_v2/scripts/sql/nacos-3.1.sql
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh stop nacos
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh start nacos
 ```
 
 ### 3. 服务无法注册到 Consul
 
 **症状：** Consul 中看不到服务
 
-**原因：** Consul 未运行或网络配置错误
+**原因：** Consul 未运行、网络配置错误，或数据目录过旧导致拒绝重新加入集群
 
 **解决：**
 ```bash
@@ -115,6 +121,11 @@ kubectl get pods -n infra | grep consul
 
 # 测试 Consul 连接
 curl http://127.0.0.1:30500/v1/status/leader
+
+# 如果日志出现 server_rejoin_age_max (开发环境)
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh stop consul
+kubectl delete pvc -n infra consul-data-consul-0
+/home/lihaoqian/project/k8s/bin/k8s-stack.sh start consul
 ```
 
 ## 配置更新

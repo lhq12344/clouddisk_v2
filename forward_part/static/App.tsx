@@ -12,6 +12,123 @@ const FILE_TYPES = [
   { label: 'JavaScript', ext: '.js', protocol: 'PROTO_JS' },
 ];
 
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  '.md',
+  '.txt',
+  '.json',
+  '.js',
+  '.ts',
+  '.tsx',
+  '.jsx',
+  '.css',
+  '.html',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.csv',
+  '.log',
+  '.sql',
+  '.sh',
+  '.py',
+  '.go',
+  '.cpp',
+  '.cc',
+  '.c',
+  '.h',
+  '.hpp',
+]);
+
+const getFileExtension = (filename: string) => {
+  const ext = filename.lastIndexOf('.');
+  if (ext < 0) return '';
+  return filename.slice(ext).toLowerCase();
+};
+
+const isTextContentType = (contentType?: string) => {
+  const normalized = (contentType || '').toLowerCase();
+  return normalized.startsWith('text/')
+    || normalized.includes('json')
+    || normalized.includes('javascript')
+    || normalized.includes('xml')
+    || normalized.includes('yaml')
+    || normalized.includes('csv')
+    || normalized.includes('svg');
+};
+
+const isTextPreviewable = (file: FileItem) => {
+  return TEXT_PREVIEW_EXTENSIONS.has(getFileExtension(file.filename))
+    || isTextContentType(file.content_type);
+};
+
+const rewriteMinioUrl = (url: string) => {
+  try {
+    const u = new URL(url);
+    if (u.host === '127.0.0.1:30900' || u.host === 'localhost:30900') {
+      u.host = 'localhost:3000';
+      u.protocol = 'http:';
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+};
+
+const openExternalUrl = (url: string) => {
+  const rewritten = rewriteMinioUrl(url);
+  const popup = window.open(rewritten, '_blank', 'noopener,noreferrer');
+  if (!popup) {
+    window.location.assign(rewritten);
+  }
+};
+
+const triggerBrowserDownload = (url: string) => {
+  const rewritten = rewriteMinioUrl(url);
+  const link = document.createElement('a');
+  link.href = rewritten;
+  link.rel = 'noopener noreferrer';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+};
+
+const textContentType = (filename: string) => {
+  if (filename.endsWith('.md')) return 'text/markdown;charset=utf-8';
+  if (filename.endsWith('.json')) return 'application/json;charset=utf-8';
+  if (filename.endsWith('.js')) return 'application/javascript;charset=utf-8';
+  return 'text/plain;charset=utf-8';
+};
+
+const sha256Hex = async (content: string) => {
+  const encoded = new TextEncoder().encode(content);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+const normalizeUserInfo = (payload: any): UserInfo | null => {
+  if (!payload) return null;
+  let source = payload;
+  if (!payload.username && typeof payload.message === 'string') {
+    try {
+      source = JSON.parse(payload.message);
+    } catch {
+      source = payload;
+    }
+  }
+  const username = source.username || source.name;
+  if (!username) return null;
+  return {
+    username,
+    email: source.email || '',
+    name: source.name || username,
+    mobile: source.mobile || source.Mobile || '',
+    gender: source.gender || '',
+    createdAt: source.createdAt || '',
+    updatedAt: source.updatedAt || ''
+  };
+};
+
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('oss_token'));
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -57,7 +174,11 @@ const App: React.FC = () => {
   const fetchUserInfo = async () => {
     try {
       const res = await api.getUserInfo();
-      setUser(res);
+      const normalized = normalizeUserInfo(res);
+      if (!normalized) {
+        throw new Error('Invalid user info payload');
+      }
+      setUser(normalized);
     } catch (err) {
       handleLogout();
     }
@@ -69,6 +190,14 @@ const App: React.FC = () => {
       fetchUserInfo();
     }
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    const pendingFiles = files.filter((f) => f.status === 'pending_scan');
+    if (pendingFiles.length === 0) return;
+
+    const poll = setInterval(fetchFiles, 3000);
+    return () => clearInterval(poll);
+  }, [files]);
 
   const handleLogout = async () => {
     await api.logout();
@@ -83,16 +212,40 @@ const App: React.FC = () => {
     setLoading(true);
     try {
       const res = await api.getPreviewUrl(file);
-      if (res && res.preview_url) {
-        const contentResponse = await fetch(res.preview_url);
-        const text = await contentResponse.text();
-        setEditContent(text);
-        setEditingFile(file);
-        setIsNewFile(false);
-        setIsPreviewMode(false);
+      if (!res?.preview_url) {
+        throw new Error('Preview URL missing');
       }
+      if (!isTextPreviewable(file)) {
+        openExternalUrl(res.preview_url);
+        return;
+      }
+      const contentResponse = await fetch(rewriteMinioUrl(res.preview_url), { cache: 'no-store' });
+      if (!contentResponse.ok) {
+        const errorText = await contentResponse.text();
+        throw new Error(`[STATUS_${contentResponse.status}]: ${errorText || 'Preview failed'}`);
+      }
+      const text = await contentResponse.text();
+      setEditContent(text);
+      setEditingFile(file);
+      setIsNewFile(false);
+      setIsPreviewMode(false);
     } catch (err: any) {
       alert('Failed to load file content: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async (file: FileItem) => {
+    setLoading(true);
+    try {
+      const res = await api.getDownloadUrl(file);
+      if (!res?.download_url) {
+        throw new Error('Download URL missing');
+      }
+      triggerBrowserDownload(res.download_url);
+    } catch (err: any) {
+      alert('Download failed: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -121,7 +274,9 @@ const App: React.FC = () => {
     if (!editingFile) return;
     setIsSaving(true);
     try {
-      await api.simpleUpload(editingFile.filename, editContent);
+      const fileHash = await sha256Hex(editContent);
+      const blob = new Blob([editContent], { type: textContentType(editingFile.filename) });
+      await api.simpleUpload(blob, editingFile.filename, fileHash, blob.type);
       setEditingFile(null);
       setIsNewFile(false);
       await fetchFiles();
@@ -175,6 +330,37 @@ const App: React.FC = () => {
   const getProtocol = (filename: string) => {
     const ext = filename.split('.').pop();
     return `PROTO_${ext?.toUpperCase() || 'UNKNOWN'}`;
+  };
+
+  const isFileAvailable = (file: FileItem) => file.status === 'success';
+
+  const formatFileStatus = (file: FileItem) => {
+    switch (file.status) {
+      case 'pending_scan':
+        return 'Scanning';
+      case 'success':
+        return 'Passed';
+      case 'infected':
+        return 'Blocked';
+      case 'scan_failed':
+        return 'Scan Failed';
+      default:
+        return file.status || 'Unknown';
+    }
+  };
+
+  const fileStatusClass = (file: FileItem) => {
+    switch (file.status) {
+      case 'success':
+        return 'border-green-500/30 text-green-400 bg-green-500/10';
+      case 'pending_scan':
+        return 'border-amber-500/30 text-amber-400 bg-amber-500/10';
+      case 'infected':
+      case 'scan_failed':
+        return 'border-red-500/30 text-red-400 bg-red-500/10';
+      default:
+        return 'border-slate-500/30 text-slate-400 bg-slate-500/10';
+    }
   };
 
   return (
@@ -279,10 +465,30 @@ const App: React.FC = () => {
                           </div>
                         </td>
                         <td className="px-6 py-5 font-mono text-[10px] text-slate-500">{file.filehash}</td>
-                        <td className="px-6 py-5 text-sm text-slate-400">{formatSize(file.filesize)}</td>
+                        <td className="px-6 py-5 text-sm text-slate-400">
+                          <div>{formatSize(file.filesize)}</div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-full border text-[9px] font-black uppercase tracking-widest ${fileStatusClass(file)}`}>
+                              {formatFileStatus(file)}
+                            </span>
+                          </div>
+                          {file.scan_detail && (
+                            <div className="mt-2 text-[10px] text-slate-500 break-words max-w-xs">{file.scan_detail}</div>
+                          )}
+                        </td>
                         <td className="px-6 py-5 text-right space-x-2">
-                          <button onClick={() => handlePreview(file)} className="p-2 glass-panel hover:text-blue-400 rounded-lg transition" title="Inspect Node"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></button>
-                          <button onClick={() => api.downloadFile(file)} className="p-2 glass-panel hover:text-green-400 rounded-lg transition" title="Extract Data"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg></button>
+                          <button
+                            onClick={() => handlePreview(file)}
+                            disabled={!isFileAvailable(file)}
+                            className="p-2 glass-panel hover:text-blue-400 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isFileAvailable(file) ? "Inspect Node" : "File is not downloadable until scan passes"}
+                          ><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></button>
+                          <button
+                            onClick={() => handleDownload(file)}
+                            disabled={!isFileAvailable(file)}
+                            className="p-2 glass-panel hover:text-green-400 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isFileAvailable(file) ? "Extract Data" : "File is not downloadable until scan passes"}
+                          ><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg></button>
                           <button onClick={(e) => { e.stopPropagation(); setPurgeFile(file); }} className="p-2 glass-panel hover:text-red-500 hover:neon-border rounded-lg transition" title="Purge Sequence"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                         </td>
                       </tr>

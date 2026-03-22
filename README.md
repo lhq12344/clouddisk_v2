@@ -142,6 +142,30 @@ flowchart LR
 2. 启动 Consul 与 Kafka。
 3. 分别启动 Go/C++ 服务模块。
 
+### `clouddisk.json` 关键配置示例
+
+当前版本的 `store_srv` 会消费 `FILE_SCAN_REQUESTED` 事件并通过 ClamAV 扫描对象，所以配置里除了 `minio` 之外还必须包含 `clamav` 段。
+
+```json
+{
+  "minio": {
+    "host": "127.0.0.1",
+    "port": 30900,
+    "accessKey": "minioadmin",
+    "secretKey": "minioadmin12345678",
+    "bucket_name": "clouddisk",
+    "region": "us-east-1"
+  },
+  "clamav": {
+    "host": "127.0.0.1",
+    "port": "3310",
+    "timeout": 30
+  }
+}
+```
+
+如需完整配置，请以 [scripts/nacos-config/clouddisk.json](/home/lihaoqian/project/clouddisk_v2/scripts/nacos-config/clouddisk.json) 为准。
+
 ---
 
 ## 📌 参考风格（GitHub 展示范例）
@@ -163,8 +187,3 @@ flowchart LR
 ## 🙌 贡献
 
 欢迎提交 Issue / PR 共同完善此云盘系统。只需确保遵循目录结构与编码规范。
-<<<<<<< ours
-
-=======
-
-> > > > > > > theirs

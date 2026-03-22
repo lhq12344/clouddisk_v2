@@ -3,6 +3,7 @@ package kafka
 import (
 	"errors"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -49,14 +50,14 @@ var (
 	ErrOSSConnectionTimeout = errors.New("oss connection timeout")
 
 	// 不可重试错误（永久性故障）
-	ErrInvalidFileFormat     = errors.New("invalid file format")
-	ErrFileNotFound          = errors.New("file not found")
-	ErrAuthenticationFailed  = errors.New("authentication failed")
-	ErrInvalidObjectKey      = errors.New("invalid object key")
-	ErrFileTooLarge          = errors.New("file too large")
-	ErrInvalidPayload        = errors.New("invalid payload")
-	ErrDuplicateEvent        = errors.New("duplicate event")
-	ErrInvalidEventID        = errors.New("invalid event id")
+	ErrInvalidFileFormat    = errors.New("invalid file format")
+	ErrFileNotFound         = errors.New("file not found")
+	ErrAuthenticationFailed = errors.New("authentication failed")
+	ErrInvalidObjectKey     = errors.New("invalid object key")
+	ErrFileTooLarge         = errors.New("file too large")
+	ErrInvalidPayload       = errors.New("invalid payload")
+	ErrDuplicateEvent       = errors.New("duplicate event")
+	ErrInvalidEventID       = errors.New("invalid event id")
 )
 
 // IsRetryableError 判断错误是否可重试
@@ -104,19 +105,16 @@ func IsRetryableError(err error) bool {
 
 // contains 检查字符串是否包含子串（不区分大小写）
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr || len(s) > len(substr) &&
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		len(s) > len(substr)*2))
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // ErrorCategory 错误分类
 type ErrorCategory string
 
 const (
-	ErrorCategoryRetryable    ErrorCategory = "retryable"    // 可重试
+	ErrorCategoryRetryable    ErrorCategory = "retryable"     // 可重试
 	ErrorCategoryNonRetryable ErrorCategory = "non_retryable" // 不可重试
-	ErrorCategoryUnknown      ErrorCategory = "unknown"      // 未知
+	ErrorCategoryUnknown      ErrorCategory = "unknown"       // 未知
 )
 
 // CategorizeError 对错误进行分类

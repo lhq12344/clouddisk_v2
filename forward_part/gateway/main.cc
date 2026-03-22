@@ -1,4 +1,5 @@
 #include <drogon/drogon.h>
+#include <cstdlib>
 #include "../internal/internal.h"
 #include "ConsulRegister.h"
 #include "MyAppData.h"
@@ -9,7 +10,11 @@ int main()
 	auto &cfg = AppConfig::getInstance();
 	std::string registerHost = cfg.consul.gateway_srv.host; // 注册到 Consul 的地址
 	std::string listenHost = "0.0.0.0"; // 监听地址
-	int port = GetFreePort();
+	int port = std::atoi(cfg.consul.gateway_srv.port.c_str());
+	if (port <= 0)
+	{
+		port = 8080;
+	}
 	std::string SigningKey = cfg.jwt.secret;
 	std::string consulHost = cfg.consul.host;
 	int consulPort = std::atoi(cfg.consul.port.c_str());
@@ -29,6 +34,9 @@ int main()
 		port);
 	// 启动 Drogon HTTP 服务
 	drogon::app().addListener(listenHost, port); // 监听在 0.0.0.0
+	drogon::app().enableRequestStream(true);
+	drogon::app().setClientMaxBodySize(128ULL * 1024 * 1024);
+	drogon::app().setClientMaxMemoryBodySize(128ULL * 1024 * 1024);
 
 	// 在服务器启动后注册到 Consul
 	drogon::app().registerBeginningAdvice([&]()

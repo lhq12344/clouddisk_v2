@@ -17,6 +17,7 @@
 struct ServerConfig
 {
 	std::string host;
+	std::string port;
 };
 
 struct RedisConfig

@@ -43,16 +43,24 @@ func NewLogger() (*zap.Logger, *zap.SugaredLogger, error) {
 		EncodeDuration: zapcore.StringDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
-	// 控制台输出
 	consoleEncoder := zapcore.NewConsoleEncoder(encoderCfg)
-
-	// 文件输出为 JSON 格式
 	fileEncoder := zapcore.NewJSONEncoder(encoderCfg)
+
+	isTTY := func() bool {
+		f, _ := os.Stdout.Stat()
+		return f != nil && (f.Mode()&os.ModeCharDevice) != 0
+	}
 
 	core := zapcore.NewTee(
 		zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), zap.DebugLevel),
 		zapcore.NewCore(fileEncoder, fileWriter, zap.InfoLevel),
 	)
+	if !isTTY() {
+		core = zapcore.NewTee(
+			zapcore.NewCore(fileEncoder, zapcore.AddSync(os.Stdout), zap.DebugLevel),
+			zapcore.NewCore(fileEncoder, fileWriter, zap.InfoLevel),
+		)
+	}
 	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 	sugar := logger.Sugar()
 	return logger, sugar, nil

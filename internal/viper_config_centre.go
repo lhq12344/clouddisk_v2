@@ -2,6 +2,10 @@ package internal
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
@@ -18,39 +22,84 @@ type ViperConfig struct {
 	KafkaConfig  KafkaConfig  `mapstructure:"kafka"`
 	Alioss       Alioss       `mapstructure:"alioss"`
 	MinIO        MinioConf    `mapstructure:"minio"`
+	ClamAV       ClamAVConfig `mapstructure:"clamav"`
 }
 
 var ViperConf ViperConfig
 
 //var filename = "./dev-config.yaml"
 
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
 func init() {
 	v := viper.New()
 	v.SetConfigType("json")
 
+	nacosHost := envOrDefault("NACOS_HOST", "127.0.0.1")
+	nacosPort := envIntOrDefault("NACOS_PORT", 30848)
+	nacosNamespace := envOrDefault("NACOS_NAMESPACE", "ce99961c-0fcf-4f4f-81d6-ac2183f24df1")
+	nacosContextPath := envOrDefault("NACOS_CONTEXT_PATH", "/nacos")
+	nacosAuthEnabled := envBoolOrDefault("NACOS_AUTH_ENABLED", false)
+	nacosUsername := strings.TrimSpace(os.Getenv("NACOS_USERNAME"))
+	nacosPassword := strings.TrimSpace(os.Getenv("NACOS_PASSWORD"))
+	nacosLogDir := envOrDefault("NACOS_LOG_DIR", "/home/lihaoqian/project/clouddisk_v2/log/nacos")
+	nacosCacheDir := envOrDefault("NACOS_CACHE_DIR", "/home/lihaoqian/project/clouddisk_v2/log/nacos/cache")
+
 	// 1. Nacos 服务配置
 	serverConfigs := []constant.ServerConfig{
 		{
-			IpAddr: "127.0.0.1",
-			Port:   30848, // NodePort
-			Scheme: "http",
+			IpAddr:      nacosHost,
+			Port:        uint64(nacosPort),
+			Scheme:      "http",
+			ContextPath: nacosContextPath,
 		},
 	}
 
-	// 2. 客户端配置（必须带用户名密码 + 正确 namespace）
+	// 2. 客户端配置（开发环境默认不启用鉴权）
 	clientConfig := constant.ClientConfig{
-		NamespaceId:         "ce99961c-0fcf-4f4f-81d6-ac2183f24df1", // ← 更新
+		NamespaceId:         nacosNamespace,
 		TimeoutMs:           10000,
 		NotLoadCacheAtStart: true,
 		LogLevel:            "debug",
-		LogDir:              "/home/lihaoqian/project/clouddisk_v2/log/nacos",
-		CacheDir:            "/home/lihaoqian/project/clouddisk_v2/log/nacos/cache",
-		Username:            "nacos", // ← 重要
-		Password:            "nacos", // ← 重要
+		LogDir:              nacosLogDir,
+		CacheDir:            nacosCacheDir,
+		ContextPath:         nacosContextPath,
+	}
+	if nacosAuthEnabled {
+		if nacosUsername == "" || nacosPassword == "" {
+			Logger.Warn("Nacos auth is enabled but credentials are incomplete")
+		}
+		clientConfig.Username = nacosUsername
+		clientConfig.Password = nacosPassword
 	}
 	Logger.Info("Creating Nacos client...",
-		zap.String("server", "127.0.0.1:30848"),
-		zap.String("namespace", clientConfig.NamespaceId))
+		zap.String("server", fmt.Sprintf("%s:%d", nacosHost, nacosPort)),
+		zap.String("namespace", clientConfig.NamespaceId),
+		zap.Bool("authEnabled", nacosAuthEnabled),
+		zap.String("contextPath", nacosContextPath))
 
 	client, err := clients.NewConfigClient(vo.NacosClientParam{
 		ClientConfig:  &clientConfig,

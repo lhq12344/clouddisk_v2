@@ -1,4 +1,5 @@
 #include "config.h"
+#include <fstream>
 
 using json = nlohmann::json;
 using namespace nacos;
@@ -45,50 +46,58 @@ public:
 	}
 };
 
+static void LoadConfigFromFile(const std::string &path)
+{
+	std::ifstream fin(path);
+	if (!fin.is_open())
+	{
+		std::cerr << "[ERROR] cannot open local config file: " << path << std::endl;
+		return;
+	}
+	std::stringstream buf;
+	buf << fin.rdbuf();
+	ConfigListener::LoadConfigFromString(buf.str());
+}
+
 void InitAppConfig()
 {
-
-	// 1. 创建 Properties
-	Properties props;
-	props[PropertyKeyConst::SERVER_ADDR] = "127.0.0.1:30848";
-	props[PropertyKeyConst::NAMESPACE] = "ce99961c-0fcf-4f4f-81d6-ac2183f24df1";
-	props[PropertyKeyConst::AUTH_USERNAME] = "nacos";
-	props[PropertyKeyConst::AUTH_PASSWORD] = "nacos";
-	// 2. 正确的工厂（旧版 API）
-	INacosServiceFactory *factory = NacosFactoryFactory::getNacosFactory(props);
-	ResourceGuard<INacosServiceFactory> guardFactory(factory);
-
-	// 3. 创建 ConfigService
-	ConfigService *configSvc = factory->CreateConfigService();
-	ResourceGuard<ConfigService> guardConfig(configSvc);
-
-	// 4. 监听配置
-	ConfigListener *listener = new ConfigListener();
-	configSvc->addListener("email_config.json", "dev", listener);
-
-	// 5. 获取初始配置
+	// 尝试从 Nacos 加载，失败则回退到本地文件
 	NacosString content;
+	bool nacosOk = false;
+
 	try
 	{
+		Properties props;
+		props[PropertyKeyConst::SERVER_ADDR] = "127.0.0.1:30848";
+		props[PropertyKeyConst::NAMESPACE] = "ce99961c-0fcf-4f4f-81d6-ac2183f24df1";
+		props[PropertyKeyConst::AUTH_USERNAME] = "nacos";
+		props[PropertyKeyConst::AUTH_PASSWORD] = "nacos";
+
+		INacosServiceFactory *factory = NacosFactoryFactory::getNacosFactory(props);
+		ResourceGuard<INacosServiceFactory> guardFactory(factory);
+
+		ConfigService *configSvc = factory->CreateConfigService();
+		ResourceGuard<ConfigService> guardConfig(configSvc);
+
+		ConfigListener *listener = new ConfigListener();
+		configSvc->addListener("email_config.json", "dev", listener);
+
 		content = configSvc->getConfig("email_config.json", "dev", 5000);
+		if (!content.empty())
+		{
+			std::cout << "[Nacos] Initial config:\n" << content << std::endl;
+			ConfigListener::LoadConfigFromString(content);
+			nacosOk = true;
+		}
 	}
-	catch (NacosException &e)
+	catch (std::exception &e)
 	{
-		std::cerr << "[ERROR] getConfig failed: "
-				  << e.errorcode() << " " << e.what() << std::endl;
-		LOG_ERROR("[ERROR] getConfig failed: ", e.errorcode(), e.what());
-		return;
+		std::cerr << "[Nacos] init failed, fallback to local config: " << e.what() << std::endl;
 	}
 
-	if (content.empty())
+	if (!nacosOk)
 	{
-		std::cerr << "[ERROR] empty config!" << std::endl;
-		LOG_ERROR("[ERROR] empty config!");
-		return;
+		std::cout << "[Config] Loading from local email_config.json" << std::endl;
+		LoadConfigFromFile("email_config.json");
 	}
-
-	std::cout << "[Nacos] Initial config:\n"
-			  << content << std::endl;
-
-	ConfigListener::LoadConfigFromString(content);
 }

@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,7 +20,7 @@ type MinioConf struct {
 	AccessKey string `mapstructure:"accessKey"`   // MinIO AccessKey
 	SecretKey string `mapstructure:"secretKey"`   // MinIO SecretKey
 	Bucket    string `mapstructure:"bucket_name"` // bucket name
-
+	Region    string `mapstructure:"region"`
 }
 
 type MINIOClient struct {
@@ -105,20 +104,24 @@ func (c *MINIOClient) MinIOUploadFile(localPath string, objectKey string) error 
 	return err
 }
 
-func (c *MINIOClient) MinIOUploadBytes(data []byte, objectKey, contentType string) error {
-	ctx := context.Background()
-	reader := bytes.NewReader(data)
-
+func (c *MINIOClient) MinIOUploadStream(
+	ctx context.Context,
+	reader io.Reader,
+	size int64,
+	objectKey,
+	contentType string,
+	userMeta map[string]string,
+) (minio.UploadInfo, error) {
+	if c == nil || c.Client == nil {
+		return minio.UploadInfo{}, fmt.Errorf("minio client is nil")
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-
-	_, err := c.Client.PutObject(ctx, c.Bucket, objectKey, reader, int64(reader.Len()),
-		minio.PutObjectOptions{
-			ContentType: contentType,
-		},
-	)
-	return err
+	return c.Client.PutObject(ctx, c.Bucket, objectKey, reader, size, minio.PutObjectOptions{
+		ContentType:  contentType,
+		UserMetadata: userMeta,
+	})
 }
 
 func (c *MINIOClient) MinIOObjectExists(objectKey string) (bool, error) {
@@ -169,8 +172,34 @@ func (c *MINIOClient) MinIOPresignPutURL(objectKey string, expiry time.Duration)
 
 // PresignGetURL 给前端下载用：GET 下载 URL
 func (c *MINIOClient) MinIOPresignGetURL(objectKey string, expiry time.Duration) (string, error) {
+	return c.MinIOPresignGetURLWithParams(objectKey, expiry, nil)
+}
+
+func (c *MINIOClient) MinIOPresignGetURLWithParams(objectKey string, expiry time.Duration, reqParams url.Values) (string, error) {
+	if c == nil || c.Client == nil {
+		return "", fmt.Errorf("minio client is nil")
+	}
 	ctx := context.Background()
-	u, err := c.Client.PresignedGetObject(ctx, c.Bucket, objectKey, expiry, nil)
+	u, err := c.Client.PresignedGetObject(ctx, c.Bucket, objectKey, expiry, reqParams)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+func (c *MINIOClient) MinIOPresignMultipartPutURL(
+	ctx context.Context,
+	objectKey, uploadID string,
+	partNumber int,
+	expiry time.Duration,
+) (string, error) {
+	if c == nil || c.Client == nil {
+		return "", fmt.Errorf("minio client is nil")
+	}
+	reqParams := make(url.Values)
+	reqParams.Set("partNumber", fmt.Sprintf("%d", partNumber))
+	reqParams.Set("uploadId", uploadID)
+	u, err := c.Client.Presign(ctx, http.MethodPut, c.Bucket, objectKey, expiry, reqParams)
 	if err != nil {
 		return "", err
 	}
@@ -264,14 +293,52 @@ func (c *MINIOClient) MinIOMultipartAbort(ctx context.Context, objectKey, upload
 	return core.AbortMultipartUpload(ctx, c.Bucket, objectKey, uploadID)
 }
 
+func (c *MINIOClient) MinIOMultipartListParts(ctx context.Context, objectKey, uploadID string) ([]minio.ObjectPart, error) {
+	if c == nil || c.Client == nil {
+		return nil, fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+	partMarker := 0
+	parts := make([]minio.ObjectPart, 0)
+	for {
+		result, err := core.ListObjectParts(ctx, c.Bucket, objectKey, uploadID, partMarker, 1000)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, result.ObjectParts...)
+		if !result.IsTruncated {
+			break
+		}
+		partMarker = result.NextPartNumberMarker
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].PartNumber < parts[j].PartNumber })
+	return parts, nil
+}
+
+func (c *MINIOClient) MinIOGetObjectStream(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	if c == nil || c.Client == nil {
+		return nil, fmt.Errorf("minio client is nil")
+	}
+	core := minio.Core{Client: c.Client}
+	reader, _, _, err := core.GetObject(ctx, c.Bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return reader, nil
+}
+
 func InitMinio() {
+	region := strings.TrimSpace(ViperConf.MinIO.Region)
+	if region == "" {
+		region = "us-east-1"
+	}
 	c, err := NewMinIOOSSClient(
 		fmt.Sprintf("%s:%d", ViperConf.MinIO.Host, ViperConf.MinIO.Port),
 		ViperConf.MinIO.AccessKey,
 		ViperConf.MinIO.SecretKey,
 		ViperConf.MinIO.Bucket,
 		false,
-		"us-east-1",
+		region,
 	)
 	if err != nil {
 		panic(fmt.Sprintf("MinIO 客户端创建失败: %v", err))

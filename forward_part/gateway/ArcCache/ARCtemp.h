@@ -50,11 +50,12 @@ namespace ArcGrpcLB
 	template <typename Service, typename ReadyFn>
 	std::shared_ptr<typename Service::Stub> PickReadyStubRR(const std::shared_ptr<Entry<Service>> &entry,
 															const std::string &key,
-															ReadyFn &&isReady)
+															ReadyFn &&isReady,
+															bool allowExpired = false)
 	{
 		std::shared_lock lk(entry->mu);
 
-		if (entry->eps.empty() || IsExpired(entry->expire_at))
+		if (entry->eps.empty() || (!allowExpired && IsExpired(entry->expire_at)))
 			return nullptr;
 
 		const size_t n = entry->eps.size();
@@ -69,11 +70,16 @@ namespace ArcGrpcLB
 			{
 				lk.unlock();
 				std::unique_lock ulk(entry->mu);
-				if (entry->eps.empty() || IsExpired(entry->expire_at) || idx >= entry->eps.size())
+				if (entry->eps.empty() || (!allowExpired && IsExpired(entry->expire_at)) || idx >= entry->eps.size())
 					return nullptr;
 				if (!entry->eps[idx].channel)
 				{
-					entry->eps[idx].channel = grpc::CreateChannel(entry->eps[idx].addrStr(), grpc::InsecureChannelCredentials());
+					grpc::ChannelArguments args;
+					args.SetInt("grpc.enable_http_proxy", 0);
+					entry->eps[idx].channel = grpc::CreateCustomChannel(
+						entry->eps[idx].addrStr(),
+						grpc::InsecureChannelCredentials(),
+						args);
 					entry->eps[idx].stub = MakeSharedStub<Service>(entry->eps[idx].channel);
 				}
 				ulk.unlock();
@@ -138,10 +144,13 @@ namespace ArcGrpcLB
 														ReadyFn &&isReady)
 	{
 		std::shared_ptr<Entry<Service>> entry;
+		auto ready = [&isReady](const std::shared_ptr<grpc::Channel> &ch) {
+			return isReady(ch);
+		};
 
 		if (cache.get(key, entry) && entry)
 		{
-			if (auto stub = PickReadyStubRR<Service>(entry, key, std::forward<ReadyFn>(isReady)))
+			if (auto stub = PickReadyStubRR<Service>(entry, key, ready))
 			{
 				return stub;
 			}
@@ -155,6 +164,14 @@ namespace ArcGrpcLB
 		auto instances = consul.getAllPassingInstances(key);
 		if (instances.empty())
 		{
+			if (entry)
+			{
+				LOG_WARN("[FindService] Consul lookup failed/empty, fallback to stale cache for {}", key);
+				if (auto staleStub = PickReadyStubRR<Service>(entry, key, ready, true))
+				{
+					return staleStub;
+				}
+			}
 			LOG_ERROR("[FindService] No available instance for {}", key);
 			return nullptr;
 		}
@@ -164,7 +181,7 @@ namespace ArcGrpcLB
 		RefreshEntry<Service>(entry, instances, ttlSeconds);
 		cache.put(key, entry);
 
-		if (auto stub = PickReadyStubRR<Service>(entry, key, std::forward<ReadyFn>(isReady)))
+		if (auto stub = PickReadyStubRR<Service>(entry, key, ready))
 		{
 			return stub;
 		}

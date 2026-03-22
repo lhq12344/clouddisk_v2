@@ -30,12 +30,12 @@ func DefaultDLQConsumerConfig() DLQConsumerConfig {
 
 // DLQConsumer DLQ 消费者
 type DLQConsumer struct {
-	consumer      sarama.ConsumerGroup
-	config        DLQConsumerConfig
-	processor     *FileUploadConsumer // 复用主消费者的处理逻辑
-	logger        *zap.Logger
-	ctx           context.Context
-	cancel        context.CancelFunc
+	consumer  sarama.ConsumerGroup
+	config    DLQConsumerConfig
+	processor *FileUploadConsumer // 复用主消费者的处理逻辑
+	logger    *zap.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // NewDLQConsumer 创建 DLQ 消费者
@@ -134,15 +134,14 @@ func (d *DLQConsumer) processFailure(failure *model.DLQFailure) {
 		zap.String("file_hash", failure.FileHash),
 		zap.Int("failure_count", failure.FailureCount))
 
-	// 【新增】检查文件是否已经成功上传到 OSS
+	// 如果文件已经完成扫描或已被拦截，则这条 DLQ 记录可以直接收敛。
 	if d.checkFileAlreadyInOSS(failure) {
-		d.logger.Info("[DLQConsumer]File already uploaded to OSS, deleting DLQ record",
+		d.logger.Info("[DLQConsumer]file already handled, resolving DLQ record",
 			zap.Uint("id", failure.ID),
 			zap.String("event_id", failure.EventID),
 			zap.String("file_hash", failure.FileHash))
 
-		// 标记为已解决并删除
-		if err := d.markResolvedAndCleanup(failure.ID, "File already in OSS"); err != nil {
+		if err := d.markResolvedAndCleanup(failure.ID, "file already handled"); err != nil {
 			d.logger.Error("[DLQConsumer]Failed to cleanup DLQ record", zap.Error(err))
 		}
 		return
@@ -167,7 +166,7 @@ func (d *DLQConsumer) processFailure(failure *model.DLQFailure) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	err := d.processor.processMessage(ctx, msg)
+	err := d.processor.processDLQMessage(ctx, msg)
 
 	if err == nil {
 		// 成功：标记为 resolved
@@ -215,16 +214,14 @@ func (d *DLQConsumer) updateStatus(id uint, status model.DLQStatus) error {
 		Update("status", status).Error
 }
 
-// checkFileAlreadyInOSS 检查文件是否已经成功上传到 OSS
+// checkFileAlreadyInOSS 检查文件是否已经完成扫描链路。
 func (d *DLQConsumer) checkFileAlreadyInOSS(failure *model.DLQFailure) bool {
-	// 如果没有 FileHash，无法检查
 	if failure.FileHash == "" {
-		d.logger.Debug("[DLQConsumer]No file hash, cannot check OSS status",
+		d.logger.Debug("[DLQConsumer]No file hash, cannot check file status",
 			zap.Uint("id", failure.ID))
 		return false
 	}
 
-	// 查询 File 表，检查状态是否为 success
 	var file model.File
 	err := internal.DB.Where("sha1 = ?", failure.FileHash).First(&file).Error
 
@@ -240,16 +237,15 @@ func (d *DLQConsumer) checkFileAlreadyInOSS(failure *model.DLQFailure) bool {
 		return false
 	}
 
-	// 检查文件状态是否为 success
-	if file.Status == model.FileSuccess {
-		d.logger.Info("[DLQConsumer]File already uploaded to OSS",
+	if file.Status == model.FileSuccess || file.Status == model.FileInfected {
+		d.logger.Info("[DLQConsumer]File already reached terminal state",
 			zap.String("file_hash", failure.FileHash),
 			zap.Uint("file_id", file.ID),
-			zap.Int64("size", file.Size))
+			zap.String("status", file.Status))
 		return true
 	}
 
-	d.logger.Debug("[DLQConsumer]File exists but not uploaded yet",
+	d.logger.Debug("[DLQConsumer]File exists but still requires handling",
 		zap.String("file_hash", failure.FileHash),
 		zap.String("status", file.Status))
 	return false

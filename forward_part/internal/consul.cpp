@@ -1,5 +1,17 @@
 #include "consul.h"
 
+namespace
+{
+	void applyLocalCurlOptions(CURL *curl)
+	{
+		curl_easy_setopt(curl, CURLOPT_PROXY, "");
+		curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
+		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
+	}
+}
+
 bool CloudiskConsul::registerService(const std::string &consulHost,
 									 int consulPort,
 									 const std::string &serviceID,
@@ -39,6 +51,7 @@ bool CloudiskConsul::registerService(const std::string &consulHost,
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json.c_str());
+	applyLocalCurlOptions(curl);
 
 	struct curl_slist *headers = nullptr;
 	headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -57,6 +70,7 @@ bool CloudiskConsul::registerService(const std::string &consulHost,
 		LOG_INFO("[Consul] Service registered: name={} ip={} port={}", serviceName, serviceIP, servicePort);
 	}
 
+	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 	return ok;
 }
@@ -76,6 +90,7 @@ bool CloudiskConsul::deregisterService(const std::string &consulHost,
 
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+	applyLocalCurlOptions(curl);
 
 	CURLcode res = curl_easy_perform(curl);
 	bool ok = (res == CURLE_OK);
@@ -122,13 +137,26 @@ std::vector<BasicInstance> CloudiskConsul::getServiceInstances(const std::string
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+	applyLocalCurlOptions(curl);
 
 	CURLcode res = curl_easy_perform(curl);
+	long statusCode = 0;
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &statusCode);
 	curl_easy_cleanup(curl);
 
 	if (res != CURLE_OK)
 	{
 		std::cerr << "[ServiceDiscovery] Request failed: " << curl_easy_strerror(res) << "\n";
+		return instances;
+	}
+	if (statusCode != 200)
+	{
+		std::cerr << "[ServiceDiscovery] Unexpected HTTP status: " << statusCode << "\n";
+		return instances;
+	}
+	if (response.empty())
+	{
+		std::cerr << "[ServiceDiscovery] Empty response for service: " << serviceName << "\n";
 		return instances;
 	}
 

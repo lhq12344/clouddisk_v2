@@ -1,0 +1,22 @@
+{
+  "kafka": {
+    "brokers": "127.0.0.1:31092",
+    "topic": "email_verify",
+    "group_id": "email_srv_group"
+  },
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 31029
+  },
+  "smtp": {
+    "url": "smtps://smtp.qq.com:465",
+    "user": "1754004887@qq.com",
+    "pass": "romcmqsisbxgjjef",
+    "from": "1754004887@qq.com",
+    "from_name": "CloudDisk"
+  },
+  "email": {
+    "code_ttl_sec": 300,
+    "dedup_ttl_sec": 60
+  }
+}

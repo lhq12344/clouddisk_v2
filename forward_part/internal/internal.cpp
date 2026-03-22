@@ -3,6 +3,30 @@
 using json = nlohmann::json;
 using namespace nacos;
 
+namespace
+{
+	std::string jsonToString(const json &value)
+	{
+		if (value.is_string())
+		{
+			return value.get<std::string>();
+		}
+		if (value.is_number_integer())
+		{
+			return std::to_string(value.get<long long>());
+		}
+		if (value.is_number_unsigned())
+		{
+			return std::to_string(value.get<unsigned long long>());
+		}
+		if (value.is_number_float())
+		{
+			return std::to_string(value.get<double>());
+		}
+		return value.dump();
+	}
+}
+
 class ConfigListener : public Listener
 {
 public:
@@ -20,24 +44,27 @@ public:
 			auto j = json::parse(content);
 
 			AppConfig &cfg = AppConfig::getInstance();
-			cfg.kafka.host = j["kafka"]["host"];
-			cfg.kafka.port = j["kafka"]["port"];
+			cfg.kafka.host = jsonToString(j["kafka"]["host"]);
+			cfg.kafka.port = jsonToString(j["kafka"]["port"]);
 
-			cfg.redis.host = j["redis"]["host"];
-			cfg.redis.port = j["redis"]["port"];
+			cfg.redis.host = jsonToString(j["redis"]["host"]);
+			cfg.redis.port = jsonToString(j["redis"]["port"]);
 
-			cfg.mysql.host = j["mysql"]["host"];
-			cfg.mysql.port = j["mysql"]["port"];
-			cfg.mysql.user = j["mysql"]["user"];
-			cfg.mysql.password = j["mysql"]["password"];
+			cfg.mysql.host = jsonToString(j["mysql"]["host"]);
+			cfg.mysql.port = jsonToString(j["mysql"]["port"]);
+			cfg.mysql.user = jsonToString(j["mysql"]["user"]);
+			cfg.mysql.password = jsonToString(j["mysql"]["password"]);
 
-			cfg.consul.host = j["consul"]["host"];
-			cfg.consul.port = j["consul"]["port"];
-			cfg.consul.account_srv.host = j["consul"]["account_srv"]["host"];
-			cfg.consul.file_srv.host = j["consul"]["file_srv"]["host"];
-			cfg.consul.gateway_srv.host = j["consul"]["gateway_srv"]["host"];
+			cfg.consul.host = jsonToString(j["consul"]["host"]);
+			cfg.consul.port = jsonToString(j["consul"]["port"]);
+			cfg.consul.account_srv.host = jsonToString(j["consul"]["account_srv"]["host"]);
+			cfg.consul.account_srv.port = jsonToString(j["consul"]["account_srv"]["port"]);
+			cfg.consul.file_srv.host = jsonToString(j["consul"]["file_srv"]["host"]);
+			cfg.consul.file_srv.port = jsonToString(j["consul"]["file_srv"]["port"]);
+			cfg.consul.gateway_srv.host = jsonToString(j["consul"]["gateway_srv"]["host"]);
+			cfg.consul.gateway_srv.port = jsonToString(j["consul"]["gateway_srv"]["port"]);
 
-			cfg.jwt.secret = j["jwt"]["signing_key"];
+			cfg.jwt.secret = jsonToString(j["jwt"]["signing_key"]);
 
 			std::cout << "[Nacos] Config parsed successfully\n";
 		}

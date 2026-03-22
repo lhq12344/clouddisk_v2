@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -51,6 +52,8 @@ const (
 	defaultBasePath       = "/mcp" // 你的静态挂载点
 	defaultDialTimeout    = 5 * time.Second
 	defaultRequestTimeout = 15 * time.Second
+	defaultInitRetryCount = 10
+	defaultInitRetryWait  = 2 * time.Second
 
 	// SSE 保活：避免中间链路 idle 超时断开
 	defaultKeepAlive         = true
@@ -89,15 +92,9 @@ func (c *serviceClients) Close() {
 func main() {
 	rootCtx := context.Background()
 
-	cfg, err := loadConfig()
+	cfg, clients, err := initDependenciesWithRetry()
 	if err != nil {
-		internal.Logger.Error("failed to load config", zap.Error(err))
-		return
-	}
-
-	clients, err := newServiceClients(cfg)
-	if err != nil {
-		internal.Logger.Error("mcp grpc clients init failed", zap.Error(err))
+		internal.Logger.Error("mcp dependency init failed", zap.Error(err))
 		return
 	}
 	defer clients.Close()
@@ -201,6 +198,37 @@ func main() {
 	}
 }
 
+func initDependenciesWithRetry() (config, *serviceClients, error) {
+	var (
+		cfg     config
+		clients *serviceClients
+		err     error
+	)
+
+	for attempt := 1; attempt <= defaultInitRetryCount; attempt++ {
+		cfg, err = loadConfig()
+		if err == nil {
+			clients, err = newServiceClients(cfg)
+		}
+		if err == nil {
+			return cfg, clients, nil
+		}
+
+		internal.Logger.Warn("mcp dependency init retry",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", defaultInitRetryCount),
+			zap.Duration("retry_after", defaultInitRetryWait),
+			zap.Error(err),
+		)
+
+		if attempt < defaultInitRetryCount {
+			time.Sleep(defaultInitRetryWait)
+		}
+	}
+
+	return config{}, nil, err
+}
+
 // ========== 服务发现 / 配置 ==========
 func FindServer(key string) (string, error) {
 	srvHost, srvPort, err := internal.DiscoverService(key)
@@ -275,10 +303,15 @@ func dialGRPC(addr string, timeout time.Duration) (*grpc.ClientConn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	dialer := &net.Dialer{}
+
 	return grpc.DialContext(
 		ctx,
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
+		grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp", target)
+		}),
 	)
 }

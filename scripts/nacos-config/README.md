@@ -156,8 +156,13 @@
 cd /home/lihaoqian/project/clouddisk_v2/scripts
 
 # 执行导入脚本
-./import-nacos-config.sh
+./import-nacos-config.sh --yes
 ```
+
+说明：
+- 当前脚本优先直接写入 `nacos_config` MySQL 元数据库，不再依赖旧版 `v1/auth/login` / `v1/cs/configs` 接口。
+- 本机未安装 `mysql` 客户端时，会自动回退到 `kubectl exec` 进入 `infra` 命名空间下的 MySQL Pod 执行。
+- 默认导入目标为本地开发环境：`127.0.0.1:30848`，命名空间 `ce99961c-0fcf-4f4f-81d6-ac2183f24df1`。
 
 ### 方法二：手动导入（通过 Nacos Console）
 
@@ -186,6 +191,8 @@ cd /home/lihaoqian/project/clouddisk_v2/scripts
    - 点击 "发布"
 
 ### 方法三：使用 Nacos Open API
+
+不推荐作为本地默认方案。Nacos 3.x 的部分旧接口已经废弃或需要兼容开关，优先使用上面的导入脚本。
 
 ```bash
 # 获取本地 IP

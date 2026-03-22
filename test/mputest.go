@@ -1,22 +1,24 @@
-package tast
+package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
+	pb "go_test/backword_part/file_server/file_srv/protobuf"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	// TODO: 改成生成的 file_pb 包路径
-	pb "go_test/backword_part/file_server/file_srv/protobuf"
+	"google.golang.org/grpc/metadata"
 )
 
 type State struct {
@@ -47,10 +49,73 @@ func loadState(path string) (*State, error) {
 func saveState(path string, st *State) error {
 	b, _ := json.MarshalIndent(st, "", "  ")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func withUserID(ctx context.Context, userID string) context.Context {
+	return metadata.AppendToOutgoingContext(
+		ctx,
+		"x-user-id", userID,
+		"x-request-id", fmt.Sprintf("mputest-%d", time.Now().UnixNano()),
+	)
+}
+
+func calculateFileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func chunkPartNumbers(items []int32, size int) [][]int32 {
+	if size <= 0 {
+		size = 1
+	}
+	var batches [][]int32
+	for i := 0; i < len(items); i += size {
+		end := i + size
+		if end > len(items) {
+			end = len(items)
+		}
+		batches = append(batches, items[i:end])
+	}
+	return batches
+}
+
+func uploadPresignedPart(ctx context.Context, url, filePath string, offset, size int64) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, io.NewSectionReader(f, offset, size))
+	if err != nil {
+		return "", err
+	}
+	req.ContentLength = size
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("put part failed: status=%s body=%s", resp.Status, string(body))
+	}
+	return resp.Header.Get("ETag"), nil
 }
 
 func main() {
@@ -59,10 +124,9 @@ func main() {
 		filePath    = flag.String("file", "", "path to big file")
 		userID      = flag.String("user_id", "1", "user id")
 		contentType = flag.String("content_type", "application/octet-stream", "content type")
-		fileHash    = flag.String("file_hash", "", "optional file hash")
-		parallel    = flag.Int("parallel", 4, "concurrency")
-		chunkSize   = flag.Int("chunk_kb", 256, "data chunk size KB per Send(data)")
-		stopAfter   = flag.Int("stop_after", 0, "simulate interruption: stop after uploading N missing parts (0=disable)")
+		fileHash    = flag.String("file_hash", "", "optional file hash; defaults to SHA-256 of file content")
+		parallel    = flag.Int("parallel", 4, "parallel part uploads")
+		stopAfter   = flag.Int("stop_after", 0, "upload N missing parts and exit without complete")
 		resume      = flag.Bool("resume", true, "resume if state file exists")
 	)
 	flag.Parse()
@@ -79,32 +143,42 @@ func main() {
 	if fi.IsDir() {
 		panic("file is a directory")
 	}
+
+	if *fileHash == "" {
+		fmt.Println("[hash] calculating SHA-256...")
+		*fileHash, err = calculateFileSHA256(*filePath)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	fileName := filepath.Base(*filePath)
 	fileSize := fi.Size()
-
 	statePath := *filePath + ".upload_state.json"
+	baseCtx := context.Background()
 
-	ctx := context.Background()
 	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
 
-	// TODO: 改成你生成的 client 名称
 	client := pb.NewFileServiceClient(conn)
 
 	var st *State
 	if *resume {
-		if s, err := loadState(statePath); err == nil && s.UploadID != "" && s.FileSize == fileSize {
+		if s, err := loadState(statePath); err == nil &&
+			s.UploadID != "" &&
+			s.FileSize == fileSize &&
+			s.FileHash == *fileHash &&
+			s.UserID == *userID {
 			st = s
 			fmt.Printf("[resume] upload_id=%s object_key=%s\n", st.UploadID, st.ObjectKey)
 		}
 	}
 
-	// 没有 state 就 init
-	if st == nil {
-		resp, err := client.InitMultipart(ctx, &pb.InitReq{
+	initMultipart := func() *State {
+		resp, err := client.InitMultipart(withUserID(baseCtx, *userID), &pb.InitReq{
 			UserId:      *userID,
 			FileName:    fileName,
 			FileSize:    fileSize,
@@ -114,7 +188,13 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		st = &State{
+
+		if resp.Status != "" && resp.Status != "init" {
+			fmt.Printf("[reuse] status=%s message=%s object_key=%s\n", resp.Status, resp.Message, resp.ObjectKey)
+			os.Exit(0)
+		}
+
+		next := &State{
 			UploadID:    resp.UploadId,
 			ObjectKey:   resp.ObjectKey,
 			PartSize:    resp.PartSize,
@@ -126,24 +206,34 @@ func main() {
 			ContentType: *contentType,
 			FileHash:    *fileHash,
 		}
-		if err := saveState(statePath, st); err != nil {
+		if err := saveState(statePath, next); err != nil {
 			panic(err)
 		}
 		fmt.Printf("[init] upload_id=%s part_size=%d total_parts=%d object_key=%s\n",
-			st.UploadID, st.PartSize, st.TotalParts, st.ObjectKey)
+			next.UploadID, next.PartSize, next.TotalParts, next.ObjectKey)
+		return next
 	}
 
-	// Status：拿到已上传分片
-	statusResp, err := client.Status(ctx, &pb.StatusReq{UploadId: st.UploadID})
-	if err != nil {
-		panic(err)
+	if st == nil {
+		st = initMultipart()
 	}
+
+	statusResp, err := client.Status(withUserID(baseCtx, st.UserID), &pb.StatusReq{UploadId: st.UploadID})
+	if err != nil {
+		_ = os.Remove(statePath)
+		fmt.Printf("[resume] status lookup failed, re-init upload session: %v\n", err)
+		st = initMultipart()
+		statusResp, err = client.Status(withUserID(baseCtx, st.UserID), &pb.StatusReq{UploadId: st.UploadID})
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	uploadedSet := make(map[int32]bool, len(statusResp.UploadedParts))
 	for _, pn := range statusResp.UploadedParts {
 		uploadedSet[pn] = true
 	}
 
-	// 生成缺失分片列表
 	missing := make([]int32, 0)
 	for i := int32(1); i <= statusResp.TotalParts; i++ {
 		if !uploadedSet[i] {
@@ -152,141 +242,66 @@ func main() {
 	}
 	fmt.Printf("[status] total=%d uploaded=%d missing=%d\n", statusResp.TotalParts, len(statusResp.UploadedParts), len(missing))
 
-	if len(missing) == 0 {
-		fmt.Println("[info] no missing parts, try complete directly")
-	} else {
-		// 并发上传缺失分片
-		partCh := make(chan int32, len(missing))
-		for _, pn := range missing {
-			partCh <- pn
-		}
-		close(partCh)
-
-		var (
-			wg        sync.WaitGroup
-			mu        sync.Mutex
-			doneCount = 0
-		)
-
-		uploadOne := func(pn int32) error {
-			// 计算该 part 的 offset/size
-			offset := int64(pn-1) * st.PartSize
-			ps := st.PartSize
-			if offset+ps > st.FileSize {
-				ps = st.FileSize - offset
-			}
-			if ps <= 0 {
-				return fmt.Errorf("invalid part size pn=%d", pn)
-			}
-
-			f, err := os.Open(st.FilePath)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-
-			// 每个 part 用一个独立的 client-stream
-			stream, err := client.UploadPart(ctx)
-			if err != nil {
-				return err
-			}
-
-			// 1) 先发 meta（第一条必须是 meta）
-			if err := stream.Send(&pb.UploadPartReq{
-				Payload: &pb.UploadPartReq_Meta{
-					Meta: &pb.UploadPartMeta{
-						UploadId:   st.UploadID,
-						PartNumber: pn,
-						PartSize:   ps,
-						ChunkHash:  "", // 可选
-					},
-				},
-			}); err != nil {
-				return err
-			}
-
-			// 2) 再发 data（多条）
-			buf := make([]byte, (*chunkSize)*1024)
-			reader := io.NewSectionReader(f, offset, ps)
-			for {
-				n, rerr := reader.Read(buf)
-				if n > 0 {
-					if err := stream.Send(&pb.UploadPartReq{
-						Payload: &pb.UploadPartReq_Data{Data: buf[:n]},
-					}); err != nil {
-						return err
-					}
-				}
-				if rerr == io.EOF {
-					break
-				}
-				if rerr != nil {
-					return rerr
-				}
-			}
-
-			// 3) CloseAndRecv 拿到 etag
-			r, err := stream.CloseAndRecv()
-			if err != nil {
-				return err
-			}
-			fmt.Printf("[part ok] pn=%d etag=%s\n", pn, r.Etag)
-			return nil
-		}
-
-		worker := func() {
-			defer wg.Done()
-			for pn := range partCh {
-				// 简单重试（网络不稳时很有用）
-				var lastErr error
-				for attempt := 1; attempt <= 5; attempt++ {
-					lastErr = uploadOne(pn)
-					if lastErr == nil {
-						break
-					}
-					time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
-				}
-				if lastErr != nil {
-					fmt.Printf("[part fail] pn=%d err=%v\n", pn, lastErr)
-					os.Exit(1)
-				}
-
-				mu.Lock()
-				doneCount++
-				// 模拟中断：上传到一定数量后直接退出（用来验证断点续传）
-				if *stopAfter > 0 && doneCount >= *stopAfter {
-					fmt.Printf("[simulate] stop_after=%d reached, exit now (re-run to resume)\n", *stopAfter)
-					os.Exit(0)
-				}
-				mu.Unlock()
-			}
-		}
-
-		nw := *parallel
-		if nw <= 0 {
-			nw = 1
-		}
-		wg.Add(nw)
-		for i := 0; i < nw; i++ {
-			go worker()
-		}
-		wg.Wait()
-		fmt.Println("[upload] all missing parts uploaded")
+	partialRun := *stopAfter > 0
+	if partialRun && len(missing) > *stopAfter {
+		missing = missing[:*stopAfter]
 	}
 
-	// Complete
-	comp, err := client.CompleteMultipart(ctx, &pb.CompleteReq{UploadId: st.UploadID})
+	for _, batch := range chunkPartNumbers(missing, *parallel) {
+		presigned, err := client.PresignParts(withUserID(baseCtx, st.UserID), &pb.PresignPartsReq{
+			UploadId:    st.UploadID,
+			PartNumbers: batch,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		urlByPart := make(map[int32]string, len(presigned.Parts))
+		for _, part := range presigned.Parts {
+			urlByPart[part.PartNumber] = part.Url
+		}
+
+		var (
+			wg    sync.WaitGroup
+			mu    sync.Mutex
+			first error
+		)
+		for _, pn := range batch {
+			pn := pn
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				offset := int64(pn-1) * st.PartSize
+				partSize := st.PartSize
+				if offset+partSize > st.FileSize {
+					partSize = st.FileSize - offset
+				}
+				etag, err := uploadPresignedPart(baseCtx, urlByPart[pn], st.FilePath, offset, partSize)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil && first == nil {
+					first = fmt.Errorf("upload part %d: %w", pn, err)
+					return
+				}
+				fmt.Printf("[part ok] pn=%d etag=%s\n", pn, etag)
+			}()
+		}
+		wg.Wait()
+		if first != nil {
+			panic(first)
+		}
+	}
+
+	if partialRun {
+		fmt.Printf("[simulate] stop_after=%d reached, exit now and rerun to resume\n", *stopAfter)
+		return
+	}
+
+	complete, err := client.CompleteMultipart(withUserID(baseCtx, st.UserID), &pb.CompleteReq{UploadId: st.UploadID})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("[complete] object_key=%s\n", comp.ObjectKey)
 
-	// 更新 state
-	st.ObjectKey = comp.ObjectKey
-	_ = saveState(statePath, st)
-
-	// 可选：打印最终状态
-	finalStatus, _ := client.Status(ctx, &pb.StatusReq{UploadId: st.UploadID})
-	sort.Slice(finalStatus.UploadedParts, func(i, j int) bool { return finalStatus.UploadedParts[i] < finalStatus.UploadedParts[j] })
-	fmt.Printf("[final status] total=%d uploaded=%d\n", finalStatus.TotalParts, len(finalStatus.UploadedParts))
+	fmt.Printf("[complete] object_key=%s status=%s etag=%s\n", complete.ObjectKey, complete.Status, complete.Etag)
+	_ = os.Remove(statePath)
 }

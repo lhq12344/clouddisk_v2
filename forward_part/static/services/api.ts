@@ -3,16 +3,62 @@ import {
   QueryResponse, 
   MultipartInitResponse, 
   UploadStatusResponse, 
-  FileItem 
+  FileItem,
+  PresignPartsResponse,
+  UploadResponse,
+  CompleteMultipartResponse,
+  ApiErrorBody
 } from '../types';
 
 
 const BASE_URL = '';  // 使用相对路径，自动适配当前访问地址
 
+const MULTIPART_SESSION_KEY_PREFIX = 'multipart_upload_sessions';
+
+const isLoopbackPresignedUrl = (rawUrl: string) => {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost'
+      : false;
+  } catch {
+    return false;
+  }
+};
+
+const clearMultipartSessionsFromStorage = (storage: Storage) => {
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key) keys.push(key);
+  }
+  for (const key of keys) {
+    if (key.startsWith(MULTIPART_SESSION_KEY_PREFIX)) {
+      storage.removeItem(key);
+    }
+  }
+};
+
+class ApiError extends Error {
+  status: number;
+  body: ApiErrorBody | null;
+
+  constructor(status: number, message: string, body: ApiErrorBody | null = null) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
 
 class ApiService {
   private getToken(): string | null {
     return localStorage.getItem('oss_token');
+  }
+
+  private clearMultipartSessions() {
+    clearMultipartSessionsFromStorage(localStorage);
+    clearMultipartSessionsFromStorage(sessionStorage);
   }
 
   private async request(endpoint: string, options: RequestInit = {}) {
@@ -40,8 +86,22 @@ class ApiService {
       });
 
       if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
         const errorText = await response.text();
-        throw new Error(`[STATUS_${response.status}]: ${errorText || 'Endpoint unreachable'}`);
+        let parsedBody: ApiErrorBody | null = null;
+        if (contentType.includes('application/json') && errorText) {
+          try {
+            parsedBody = JSON.parse(errorText);
+          } catch {
+            parsedBody = null;
+          }
+        }
+        const message =
+          parsedBody?.message ||
+          parsedBody?.details ||
+          errorText ||
+          'Endpoint unreachable';
+        throw new ApiError(response.status, `[STATUS_${response.status}]: ${message}`, parsedBody);
       }
 
       const responseText = await response.text();
@@ -84,14 +144,15 @@ class ApiService {
       }
     }
     localStorage.removeItem('oss_token');
+    this.clearMultipartSessions();
   }
 
   async queryFiles(): Promise<QueryResponse> {
     return this.request('/file/query', { method: 'POST' });
   }
 
-  async downloadFile(file: FileItem) {
-    const res = await this.request('/file/download', { 
+  async getDownloadUrl(file: FileItem) {
+    return this.request('/file/download', { 
       method: 'POST', 
       body: JSON.stringify({ 
         filename: file.filename, 
@@ -99,10 +160,6 @@ class ApiService {
         file_size: file.filesize 
       }) 
     });
-    if (res && res.download_url) {
-      window.location.href = res.download_url;
-    }
-    return res;
   }
 
   // 确认已绑定 /file/delete 路径
@@ -127,10 +184,16 @@ class ApiService {
     });
   }
 
-  async simpleUpload(filename: string, content: string) {
-    return this.request('/file/upload', { 
-      method: 'POST', 
-      body: JSON.stringify({ filename, content }) 
+  async simpleUpload(file: Blob, filename: string, fileHash: string, contentType?: string): Promise<UploadResponse> {
+    return this.request('/file/upload', {
+      method: 'POST',
+      headers: {
+        'X-File-Name': filename,
+        'X-File-Hash': fileHash,
+        'X-File-Size': file.size.toString(),
+        'Content-Type': contentType || file.type || 'application/octet-stream'
+      },
+      body: file
     });
   }
 
@@ -141,21 +204,56 @@ class ApiService {
     });
   }
 
-  async uploadPart(uploadId: string, partNumber: number, body: ArrayBuffer, chunkHash: string) {
-    return this.request('/file/uploadpart', {
+  async presignParts(upload_id: string, part_numbers: number[]): Promise<PresignPartsResponse> {
+    return this.request('/file/PresignParts', {
       method: 'POST',
-      headers: {
-        'X-Upload-Id': uploadId,
-        'X-Part-Number': partNumber.toString(),
-        'X-Chunk-Hash': chunkHash,
-        'X-Part-Size': body.byteLength.toString(),
-        'Content-Type': 'application/octet-stream'
-      },
-      body
+      body: JSON.stringify({ upload_id, part_numbers })
     });
   }
 
-  async completeMultipart(upload_id: string) {
+  async uploadPresignedPart(url: string, body: Blob) {
+    if (isLoopbackPresignedUrl(url)) {
+      const token = this.getToken();
+      const headers = new Headers();
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+      headers.set('X-Request-Id', crypto.randomUUID());
+      headers.set('X-Presigned-Part-Url', url);
+
+      const response = await fetch(`${BASE_URL}/file/uploadpart`, {
+        method: 'POST',
+        headers,
+        body
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`[STATUS_${response.status}]: ${errorText || 'Part upload failed'}`);
+      }
+      const responseText = await response.text();
+      if (!responseText) {
+        return '';
+      }
+      try {
+        const parsed = JSON.parse(responseText);
+        return parsed.etag || '';
+      } catch {
+        return '';
+      }
+    }
+
+    const response = await fetch(url, {
+      method: 'PUT',
+      body
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`[STATUS_${response.status}]: ${errorText || 'Part upload failed'}`);
+    }
+    return response.headers.get('ETag') || '';
+  }
+
+  async completeMultipart(upload_id: string): Promise<CompleteMultipartResponse> {
     return this.request('/file/CompleteMultipart', {
       method: 'POST',
       body: JSON.stringify({ upload_id })

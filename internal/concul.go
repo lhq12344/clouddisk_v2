@@ -52,6 +52,9 @@ func InitConsul() {
 
 // RegisterGrpcService Grpc注册服务
 func RegisterGrpcService(serviceName, serviceID, host string, port int) error {
+	if ConsulClient == nil {
+		return fmt.Errorf("consul client is not initialized")
+	}
 
 	// 健康检查配置
 	check := &api.AgentServiceCheck{
@@ -93,6 +96,9 @@ func RegisterGRPCHealth(grpcServer *grpc.Server) {
 
 // RegisterGinService Gin注册服务
 func RegisterGinService(serviceName, serviceID, host string, port int) error {
+	if ConsulClient == nil {
+		return fmt.Errorf("consul client is not initialized")
+	}
 
 	// 健康检查配置
 	check := &api.AgentServiceCheck{
@@ -137,6 +143,9 @@ func DeregisterService(serviceID string) {
 
 // DiscoverService 服务发现
 func DiscoverService(serviceName string) (string, int, error) {
+	if ConsulClient == nil {
+		return "", 0, fmt.Errorf("consul client is not initialized")
+	}
 
 	// 只查询健康服务
 	services, _, err :=

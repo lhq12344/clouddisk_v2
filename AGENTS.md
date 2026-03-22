@@ -18,6 +18,7 @@ email_srv (C++) ← Kafka — email notifications
 ## Build & Run Commands
 
 ### Go Backend (module: `go_test`, Go 1.24)
+
 ```bash
 # Build individual services
 go build -o bin/account_srv ./backword_part/account_server/account_srv/
@@ -43,6 +44,7 @@ go vet ./...
 ```
 
 ### Frontend (React 19 + Vite 6, in `forward_part/static/`)
+
 ```bash
 cd forward_part/static
 npm install
@@ -52,6 +54,7 @@ npm run preview   # Preview production build
 ```
 
 ### C++ Email Service (C++17, CMake, in `other_srv/email_srv/`)
+
 ```bash
 cd other_srv/email_srv
 mkdir -p build && cd build
@@ -71,6 +74,7 @@ ctest --output-on-failure
 ```
 
 ### Protobuf Code Generation
+
 ```bash
 # From proto/ directory — generate Go stubs
 protoc --go_out=. --go-grpc_out=. proto/account_srv/account.proto
@@ -195,12 +199,12 @@ for _, tt := range tests {
 
 ## Infrastructure Dependencies
 
-| Service | Purpose | Config Source |
-|---------|---------|---------------|
-| MySQL | Primary database (GORM) | Nacos `clouddisk.json` |
-| Redis | Cache, multipart upload state | Nacos |
-| Consul | Service discovery + health checks | Nacos |
-| Kafka | Async event bus (outbox pattern) | Nacos |
-| MinIO | Object storage (primary) | Nacos |
-| AliOSS | Object storage (secondary) | Nacos |
-| Nacos | Configuration center | Hardcoded in `viper_config_centre.go` |
+| Service | Purpose                           | Config Source                         |
+| ------- | --------------------------------- | ------------------------------------- |
+| MySQL   | Primary database (GORM)           | Nacos `clouddisk.json`                |
+| Redis   | Cache, multipart upload state     | Nacos                                 |
+| Consul  | Service discovery + health checks | Nacos                                 |
+| Kafka   | Async event bus (outbox pattern)  | Nacos                                 |
+| MinIO   | Object storage (primary)          | Nacos                                 |
+| AliOSS  | Object storage (secondary)        | Nacos                                 |
+| Nacos   | Configuration center              | Hardcoded in `viper_config_centre.go` |

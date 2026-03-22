@@ -13,19 +13,19 @@
     "host": "127.0.0.1",
     "port": "30500",
     "account_srv": {
-      "host": "172.20.10.3",
+      "host": "10.42.0.1",
       "port": 50051
     },
     "file_srv": {
-      "host": "172.20.10.3",
+      "host": "10.42.0.1",
       "port": 50052
     },
     "mcp_srv": {
-      "host": "172.20.10.3",
+      "host": "10.42.0.1",
       "port": 50053
     },
     "gateway_srv": {
-      "host": "172.20.10.3",
+      "host": "10.42.0.1",
       "port": 8080
     }
   },
@@ -47,6 +47,16 @@
     "port": 30900,
     "accessKey": "minioadmin",
     "secretKey": "minioadmin12345678",
-    "bucket_name": "clouddisk"
+    "bucket_name": "clouddisk",
+    "region": "us-east-1"
+  },
+  "clamav": {
+    "host": "127.0.0.1",
+    "port": "3310",
+    "socket": "/home/lihaoqian/project/clouddisk_v2/run/clamav/clamd-local.ctl",
+    "timeout": 120,
+    "max_scan_size_mb": 1024,
+    "max_file_size_mb": 1024,
+    "stream_max_length_mb": 1024
   }
 }

@@ -17,6 +17,9 @@ message FileInfo {
   int64  file_sizes   = 3;
   string upload_at    = 4;
   string last_updated = 5;
+  string status       = 6;
+  string scan_detail  = 7;
+  string content_type = 8;
 }
 
 message ReqFileQuery {
@@ -77,6 +80,30 @@ message InitResp {
   string object_key  = 2;
   int64  part_size   = 3;
   int32  total_parts = 4;
+  string status      = 5;
+  string message     = 6;
+}
+
+message UploadFileMeta {
+  string user_id      = 1;
+  string file_name    = 2;
+  int64  file_size    = 3;
+  string file_hash    = 4;
+  string content_type = 5;
+}
+
+message UploadFileReq {
+  oneof payload {
+    UploadFileMeta meta = 1;
+    bytes          data = 2;
+  }
+}
+
+message UploadFileResp {
+  string file_hash  = 1;
+  string object_key = 2;
+  string status     = 3;
+  string message    = 4;
 }
 
 message UploadPartMeta {
@@ -98,6 +125,22 @@ message UploadPartResp {
   int32  part_number = 2;
   int64  part_size   = 3;
   string etag        = 4;
+}
+
+message PresignPartsReq {
+  string upload_id = 1;
+  repeated int32 part_numbers = 2;
+}
+
+message PresignedPart {
+  int32 part_number = 1;
+  string url = 2;
+  string expires_at = 3;
+}
+
+message PresignPartsResp {
+  string upload_id = 1;
+  repeated PresignedPart parts = 2;
 }
 
 message CompleteReq { string upload_id = 1; }
@@ -130,11 +173,13 @@ message ReqDeleteFile {
 service fileService {
   rpc filedowm(ReqFileDown) returns (Resp) {}
   rpc LoadFile(Reqloadfile) returns (Resp) {}
+  rpc UploadFile(stream UploadFileReq) returns (UploadFileResp) {}
   rpc Showfile(Reqshowfile) returns (Resp ) {}
   rpc filequeryinfo(ReqFileQuery) returns (RespFileQuery) {}
   rpc ResolveFileHash(ReqResolveFileHash) returns (RespResolveFileHash) {}
 
   rpc InitMultipart(InitReq) returns (InitResp);
+  rpc PresignParts(PresignPartsReq) returns (PresignPartsResp);
   rpc UploadPart(stream UploadPartReq) returns (UploadPartResp);
   rpc CompleteMultipart(CompleteReq) returns (CompleteResp);
   rpc AbortMultipart(AbortReq) returns (AbortResp);
