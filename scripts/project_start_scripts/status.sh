@@ -47,6 +47,8 @@ check_service() {
     local fallback_port=""
 
     case "$service_name" in
+        gateway) fallback_port="38080" ;;
+        frontend) fallback_port="3000" ;;
         mcp_srv) fallback_port="50053" ;;
     esac
 

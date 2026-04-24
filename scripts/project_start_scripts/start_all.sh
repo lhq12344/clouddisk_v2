@@ -24,6 +24,10 @@ mkdir -p "$LOG_DIR"
 PID_DIR="$PROJECT_ROOT/.pids"
 mkdir -p "$PID_DIR"
 
+# Go 构建缓存目录
+GO_CACHE_DIR="$PROJECT_ROOT/.cache/go-build"
+mkdir -p "$GO_CACHE_DIR"
+
 K8S_NAMESPACE="infra"
 K8S_SCRIPT="/home/lihaoqian/project/k8s/bin/k8s-stack.sh"
 NACOS_SQL="$PROJECT_ROOT/scripts/sql/nacos-3.1.sql"
@@ -31,6 +35,7 @@ NGINX_MODE_FILE="$PID_DIR/nginx.mode"
 DOCKER_OPENRESTY_IMAGE="${DOCKER_OPENRESTY_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/uusec/openresty-manager:latest}"
 DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
 CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
+K8S_RUNTIME_RECONCILER="$PROJECT_ROOT/scripts/project_start_scripts/reconcile_k8s_runtime.sh"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 一键启动脚本${NC}"
@@ -120,6 +125,20 @@ nacos_health_ok() {
 
 k8s_available() {
     command -v kubectl &> /dev/null && kubectl get namespace "$K8S_NAMESPACE" > /dev/null 2>&1
+}
+
+reconcile_k8s_runtime() {
+    if ! k8s_available; then
+        return
+    fi
+
+    if [ ! -x "$K8S_RUNTIME_RECONCILER" ]; then
+        return
+    fi
+
+    echo -e "${YELLOW}[预处理] 校正 K8s 运行态与外部清单...${NC}"
+    "$K8S_RUNTIME_RECONCILER" || echo -e "${YELLOW}  ⚠ K8s 自愈步骤未完全成功，继续现有启动流程${NC}"
+    echo ""
 }
 
 print_k8s_pod_status() {
@@ -483,7 +502,7 @@ start_go_services() {
     else
         echo -e "  启动 account_srv..."
         cd "$PROJECT_ROOT"
-        nohup go run ./backword_part/account_server/account_srv/ > "$LOG_DIR/account_srv.log" 2>&1 &
+        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/account_server/account_srv/ > "$LOG_DIR/account_srv.log" 2>&1 &
         ACCOUNT_PID=$!
         echo $ACCOUNT_PID > "$PID_DIR/account_srv.pid"
         echo -e "${GREEN}    ✓ account_srv (PID: $ACCOUNT_PID)${NC}"
@@ -496,7 +515,7 @@ start_go_services() {
         echo -e "${GREEN}  ✓ file_srv 已在运行，跳过重复启动${NC}"
     else
         echo -e "  启动 file_srv..."
-        nohup go run ./backword_part/file_server/file_srv/ > "$LOG_DIR/file_srv.log" 2>&1 &
+        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/file_server/file_srv/ > "$LOG_DIR/file_srv.log" 2>&1 &
         FILE_PID=$!
         echo $FILE_PID > "$PID_DIR/file_srv.pid"
         echo -e "${GREEN}    ✓ file_srv (PID: $FILE_PID)${NC}"
@@ -509,7 +528,7 @@ start_go_services() {
         echo -e "${GREEN}  ✓ store_srv 已在运行，跳过重复启动${NC}"
     else
         echo -e "  启动 store_srv..."
-        nohup go run ./other_srv/store_srv/ > "$LOG_DIR/store_srv.log" 2>&1 &
+        nohup env GOCACHE="$GO_CACHE_DIR" go run ./other_srv/store_srv/ > "$LOG_DIR/store_srv.log" 2>&1 &
         STORE_PID=$!
         echo $STORE_PID > "$PID_DIR/store_srv.pid"
         echo -e "${GREEN}    ✓ store_srv (PID: $STORE_PID)${NC}"
@@ -523,7 +542,7 @@ start_go_services() {
             echo -e "${GREEN}  ✓ AI_srv 已在运行，跳过重复启动${NC}"
         else
             echo -e "  启动 AI_srv..."
-            nohup go run ./backword_part/AI_server/ > "$LOG_DIR/ai_srv.log" 2>&1 &
+            nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/AI_server/ > "$LOG_DIR/ai_srv.log" 2>&1 &
             AI_PID=$!
             echo $AI_PID > "$PID_DIR/ai_srv.pid"
             echo -e "${GREEN}    ✓ AI_srv (PID: $AI_PID)${NC}"
@@ -543,7 +562,7 @@ start_go_services() {
             echo -e "${YELLOW}  ⚠ 端口 50053 已被占用，跳过 mcp_srv 重复启动${NC}"
         else
             echo -e "  启动 mcp_srv..."
-            nohup go run ./backword_part/mcp_server/ > "$LOG_DIR/mcp_srv.log" 2>&1 &
+            nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/mcp_server/ > "$LOG_DIR/mcp_srv.log" 2>&1 &
             MCP_PID=$!
             echo $MCP_PID > "$PID_DIR/mcp_srv.pid"
             sleep 1
@@ -668,7 +687,7 @@ show_info() {
         GATEWAY_PID=$(cat "$GATEWAY_PID_FILE")
         GATEWAY_PORT=$(lsof -i -P -n 2>/dev/null | grep $GATEWAY_PID | grep LISTEN | awk '{print $9}' | cut -d: -f2 | head -1)
         if [ ! -z "$GATEWAY_PORT" ]; then
-            echo -e "${GREEN}  网关:     http://172.20.10.3:$GATEWAY_PORT${NC}"
+            echo -e "${GREEN}  网关:     http://127.0.0.1:$GATEWAY_PORT${NC}"
         else
             echo -e "${GREEN}  网关:     (动态端口，查看日志)${NC}"
         fi
@@ -705,6 +724,7 @@ show_info() {
 
 # 主流程
 main() {
+    reconcile_k8s_runtime
     check_infrastructure
     check_dependencies
     start_nginx

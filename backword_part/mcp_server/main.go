@@ -91,6 +91,7 @@ func (c *serviceClients) Close() {
 // ========== main ==========
 func main() {
 	rootCtx := context.Background()
+	serviceID := "mcp_srv_1"
 
 	cfg, clients, err := initDependenciesWithRetry()
 	if err != nil {
@@ -181,10 +182,35 @@ func main() {
 		ctx, cancel := context.WithTimeout(rootCtx, 5*time.Second)
 		defer cancel()
 
+		internal.DeregisterService(serviceID)
+
 		// 先关 SSE sessions（内部会关闭会话），再关 HTTP Server
 		_ = sseServer.Shutdown(ctx)
 		_ = httpSrv.Shutdown(ctx)
 	}()
+
+	host, port, splitErr := net.SplitHostPort(cfg.httpAddr)
+	if splitErr != nil {
+		internal.Logger.Error("split mcp listen address failed",
+			zap.String("http_addr", cfg.httpAddr),
+			zap.Error(splitErr),
+		)
+		return
+	}
+
+	portNum, convErr := strconv.Atoi(port)
+	if convErr != nil {
+		internal.Logger.Error("parse mcp listen port failed",
+			zap.String("port", port),
+			zap.Error(convErr),
+		)
+		return
+	}
+
+	if err := internal.RegisterGinService("mcp_srv", serviceID, host, portNum); err != nil {
+		internal.Logger.Error("mcp consul register failed", zap.Error(err))
+		return
+	}
 
 	internal.Logger.Info("mcp server listening",
 		zap.String("address", cfg.httpAddr),

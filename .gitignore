@@ -41,5 +41,9 @@ backword_part/log/nacos/cache/
 # runtime logs / nacos cache
 log/nacos
 **/nacos/cache/
-
-
+.cache
+__pycache__/
+.pids/
+forward_part/config/nginx/nginx.pid
+run/clamav/*
+!run/clamav/.gitkeep

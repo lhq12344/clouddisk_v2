@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"go_test/backword_part/model"
+	"time"
 
 	"github.com/IBM/sarama"
+	"go.uber.org/zap"
 )
 
 const Topic = model.FileUploadEventTopic
@@ -26,13 +28,36 @@ func InitKafkaProducer() {
 	cfg.Producer.RequiredAcks = sarama.WaitForAll
 	cfg.Producer.Retry.Max = 3
 	cfg.Producer.Return.Successes = true // SyncProducer 必须为 true
+	cfg.Net.DialTimeout = 5 * time.Second
+	cfg.Net.ReadTimeout = 5 * time.Second
+	cfg.Net.WriteTimeout = 5 * time.Second
 
-	producer, err := sarama.NewSyncProducer(brokers, cfg)
-	if err != nil {
-		panic(err)
+	var (
+		producer sarama.SyncProducer
+		err      error
+	)
+
+	for attempt := 1; attempt <= 15; attempt++ {
+		producer, err = sarama.NewSyncProducer(brokers, cfg)
+		if err == nil {
+			KafkaProducer = producer
+			Logger.Info("[InitKafkaProducer]Kafka producer created")
+			return
+		}
+
+		Logger.Warn("[InitKafkaProducer]kafka producer init retry",
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", 15),
+			zap.Strings("brokers", brokers),
+			zap.Error(err),
+		)
+
+		if attempt < 15 {
+			time.Sleep(2 * time.Second)
+		}
 	}
-	KafkaProducer = producer
-	Logger.Info("[InitKafkaProducer]Kafka producer created")
+
+	panic(err)
 }
 
 // ProduceFileUploadMsg 发送消息到 Kafka

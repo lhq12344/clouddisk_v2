@@ -20,11 +20,19 @@ PID_DIR="$PROJECT_ROOT/.pids"
 NGINX_MODE_FILE="$PID_DIR/nginx.mode"
 DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
 CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
+K8S_NAMESPACE="infra"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 停止所有服务${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
+
+k8s_openresty_running() {
+    command -v kubectl &> /dev/null || return 1
+
+    kubectl get pods -n "$K8S_NAMESPACE" -l app=openresty --no-headers 2>/dev/null \
+        | awk '{split($2, ready, "/"); if (ready[1] == ready[2] && $3 == "Running") found=1} END {exit found ? 0 : 1}'
+}
 
 # 停止服务函数
 stop_service() {
@@ -55,6 +63,12 @@ stop_service() {
 # 停止 OpenResty/Nginx
 stop_nginx() {
     NGINX_PID_FILE="$PROJECT_ROOT/forward_part/config/nginx/nginx.pid"
+
+    if k8s_openresty_running; then
+        echo -e "${YELLOW}OpenResty/Nginx 由 K8s 接管，跳过本地停止${NC}"
+        rm -f "$NGINX_MODE_FILE"
+        return
+    fi
 
     if [ -f "$NGINX_MODE_FILE" ] && [ "$(cat "$NGINX_MODE_FILE" 2>/dev/null)" = "docker" ]; then
         if command -v docker &> /dev/null && docker inspect "$DOCKER_OPENRESTY_CONTAINER" > /dev/null 2>&1; then
