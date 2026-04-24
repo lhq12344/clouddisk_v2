@@ -9,7 +9,6 @@ import (
 	"go_test/internal"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -18,67 +17,34 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrInboxLocked 表示 Inbox 被其他 worker 锁定，不应提交 offset。
+// ErrInboxLocked 表示 Inbox 正被其他实例处理，当前分区不应越过这条消息推进 offset。
 var ErrInboxLocked = errors.New("inbox locked by other worker")
 
-type Task struct {
-	msg     *sarama.ConsumerMessage
-	session sarama.ConsumerGroupSession
-}
+type consumeAction int
+
+const (
+	consumeRetryLater consumeAction = iota
+	consumeCommit
+)
 
 // FileUploadConsumer 复用既有 outbox/inbox/Kafka 框架，但消息语义已变为“上传完成待病毒扫描”。
 type FileUploadConsumer struct {
 	ossClient   *internal.MINIOClient
-	workerCount int
-	taskCh      chan *Task
-	wg          sync.WaitGroup
 	instanceID  string
 	retryConfig RetryConfig
 	dlqProducer *DLQProducer
 }
 
-func NewFileUploadConsumer(ctx context.Context, workerCount int, dlqProducer *DLQProducer) *FileUploadConsumer {
+func NewFileUploadConsumer(_ context.Context, _ int, dlqProducer *DLQProducer) *FileUploadConsumer {
 	host, _ := osHostname()
 	instanceID := fmt.Sprintf("%s-%d", host, osPID())
 
-	c := &FileUploadConsumer{
+	return &FileUploadConsumer{
 		ossClient:   internal.MinIOClient,
-		workerCount: workerCount,
-		taskCh:      make(chan *Task, workerCount*2),
 		instanceID:  instanceID,
 		retryConfig: DefaultRetryConfig(),
 		dlqProducer: dlqProducer,
 	}
-
-	for i := 0; i < workerCount; i++ {
-		c.wg.Add(1)
-		go func(ctx context.Context) {
-			defer c.wg.Done()
-			for t := range c.taskCh {
-				err := c.processMessageWithRetry(ctx, t.msg)
-				switch {
-				case err == nil:
-					if t.session != nil && t.session.Context().Err() == nil {
-						t.session.MarkMessage(t.msg, "")
-					}
-				case errors.Is(err, ErrInboxLocked):
-					internal.Logger.Debug("[FileUploadConsumer]inbox locked, will not commit offset",
-						zap.Int32("partition", t.msg.Partition),
-						zap.Int64("offset", t.msg.Offset))
-				default:
-					internal.Logger.Error("[FileUploadConsumer]message failed after retries",
-						zap.Error(err),
-						zap.Int32("partition", t.msg.Partition),
-						zap.Int64("offset", t.msg.Offset))
-					if t.session != nil && t.session.Context().Err() == nil {
-						t.session.MarkMessage(t.msg, "")
-					}
-				}
-			}
-		}(ctx)
-	}
-
-	return c
 }
 
 func (c *FileUploadConsumer) Setup(session sarama.ConsumerGroupSession) error {
@@ -92,37 +58,85 @@ func (c *FileUploadConsumer) Cleanup(session sarama.ConsumerGroupSession) error 
 }
 
 func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
+	for {
 		select {
-		case c.taskCh <- &Task{msg: msg, session: session}:
 		case <-session.Context().Done():
 			return nil
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
+			action, err := c.processMessageWithRetry(session.Context(), msg)
+			switch action {
+			case consumeCommit:
+				if err != nil {
+					internal.Logger.Error("[FileUploadConsumer]message converged with terminal failure, committing offset",
+						zap.Error(err),
+						zap.Int32("partition", msg.Partition),
+						zap.Int64("offset", msg.Offset))
+				}
+				c.commitMessage(session, msg)
+			case consumeRetryLater:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					internal.Logger.Warn("[FileUploadConsumer]message not converged, leaving offset uncommitted",
+						zap.Error(err),
+						zap.Int32("partition", msg.Partition),
+						zap.Int64("offset", msg.Offset))
+				}
+			}
 		}
 	}
-	return nil
 }
 
-func (c *FileUploadConsumer) processMessageWithRetry(ctx context.Context, msg *sarama.ConsumerMessage) error {
+func (c *FileUploadConsumer) commitMessage(session sarama.ConsumerGroupSession, msg *sarama.ConsumerMessage) {
+	if session == nil || msg == nil {
+		return
+	}
+	if session.Context().Err() != nil {
+		return
+	}
+	session.MarkMessage(msg, "")
+	session.Commit()
+}
+
+func (c *FileUploadConsumer) processMessageWithRetry(ctx context.Context, msg *sarama.ConsumerMessage) (consumeAction, error) {
 	var (
-		lastErr    error
-		retryCount int
+		lastErr        error
+		retryCount     int
+		lockRetryCount int
 	)
 
 	for retryCount <= c.retryConfig.MaxRetries {
+		if ctx.Err() != nil {
+			return consumeRetryLater, ctx.Err()
+		}
+
 		err := c.processMessage(ctx, msg)
 		if err == nil {
-			return nil
+			return consumeCommit, nil
 		}
 
 		lastErr = err
 		if errors.Is(err, ErrInboxLocked) {
-			internal.Logger.Debug("[FileUploadConsumer]inbox locked, skip retry", zap.Int64("offset", msg.Offset))
-			return err
+			lockRetryCount++
+			backoff := c.calculateInboxLockBackoff(lockRetryCount)
+			internal.Logger.Debug("[FileUploadConsumer]inbox locked, waiting before retry",
+				zap.Int64("offset", msg.Offset),
+				zap.Int("attempt", lockRetryCount),
+				zap.Duration("backoff", backoff))
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-ctx.Done():
+				return consumeRetryLater, ctx.Err()
+			}
 		}
 
 		if !IsRetryableError(err) {
-			c.handleTerminalFailure(ctx, msg, err, retryCount)
-			return err
+			if durableErr := c.handleTerminalFailure(ctx, msg, err, retryCount); durableErr != nil {
+				return consumeRetryLater, durableErr
+			}
+			return consumeCommit, err
 		}
 
 		if retryCount < c.retryConfig.MaxRetries {
@@ -136,51 +150,64 @@ func (c *FileUploadConsumer) processMessageWithRetry(ctx context.Context, msg *s
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
-				return ctx.Err()
+				return consumeRetryLater, ctx.Err()
 			}
 		}
 
 		retryCount++
 	}
 
-	c.handleTerminalFailure(ctx, msg, lastErr, retryCount)
-	return lastErr
+	if durableErr := c.handleTerminalFailure(ctx, msg, lastErr, retryCount); durableErr != nil {
+		return consumeRetryLater, durableErr
+	}
+	return consumeCommit, lastErr
 }
 
-func (c *FileUploadConsumer) handleTerminalFailure(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) {
+func (c *FileUploadConsumer) calculateInboxLockBackoff(attempt int) time.Duration {
+	backoff := c.retryConfig.CalculateBackoff(attempt)
+	if backoff > 5*time.Second {
+		return 5 * time.Second
+	}
+	return backoff
+}
+
+func (c *FileUploadConsumer) handleTerminalFailure(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) error {
 	if markErr := c.markMessageScanFailed(ctx, msg, err.Error()); markErr != nil {
 		internal.Logger.Error("[FileUploadConsumer]mark scan_failed failed",
 			zap.Error(markErr),
 			zap.Int64("offset", msg.Offset))
 	}
-	dlqUpdated := false
+
 	if c.dlqProducer != nil {
 		if dlqErr := c.dlqProducer.SendToDLQ(ctx, msg, err, retryCount); dlqErr != nil {
 			internal.Logger.Error("[FileUploadConsumer]send to DLQ failed",
 				zap.Error(dlqErr),
 				zap.Int64("offset", msg.Offset))
 		} else {
-			dlqUpdated = true
+			return nil
 		}
 	}
-	if !dlqUpdated {
-		eventID, extractErr := extractEventID(msg.Value)
-		if extractErr != nil {
-			internal.Logger.Error("[FileUploadConsumer]extract event id failed after terminal failure",
-				zap.Error(extractErr),
-				zap.Int64("offset", msg.Offset))
-			return
-		}
-		if eventID == "" {
-			return
-		}
-		if inboxErr := c.markInboxDLQ(ctx, eventID, err.Error()); inboxErr != nil {
-			internal.Logger.Error("[FileUploadConsumer]mark inbox DLQ failed",
-				zap.Error(inboxErr),
-				zap.String("event_id", eventID),
-				zap.Int64("offset", msg.Offset))
-		}
+
+	dlqMsg, buildErr := buildDLQMessage(msg, err, retryCount)
+	if buildErr != nil {
+		internal.Logger.Error("[FileUploadConsumer]build fallback DLQ record failed",
+			zap.Error(buildErr),
+			zap.Int64("offset", msg.Offset))
+		return fmt.Errorf("terminal failure persisted incompletely: %w", buildErr)
 	}
+
+	if c.dlqProducer != nil {
+		if persistErr := c.dlqProducer.persistToDB(ctx, dlqMsg); persistErr != nil {
+			internal.Logger.Error("[FileUploadConsumer]persist fallback DLQ record failed",
+				zap.Error(persistErr),
+				zap.String("event_id", dlqMsg.EventID),
+				zap.Int64("offset", msg.Offset))
+			return fmt.Errorf("terminal failure persisted incompletely: %w", persistErr)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("terminal failure persisted incompletely: dlq producer unavailable")
 }
 
 func (c *FileUploadConsumer) processMessage(ctx context.Context, msg *sarama.ConsumerMessage) error {

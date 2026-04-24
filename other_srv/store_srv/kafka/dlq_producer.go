@@ -64,16 +64,15 @@ type DLQMessage struct {
 	EventID   string `json:"event_id"`
 }
 
-// SendToDLQ 发送消息到死信队列
-func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) error {
+func buildDLQMessage(msg *sarama.ConsumerMessage, err error, retryCount int) (*DLQMessage, error) {
 	now := time.Now()
 
-	// 解析原始消息获取业务字段
 	var payload model.FileEventPayload
-	_ = json.Unmarshal(msg.Value, &payload)
+	if unmarshalErr := json.Unmarshal(msg.Value, &payload); unmarshalErr != nil {
+		return nil, fmt.Errorf("failed to unmarshal original payload: %w", unmarshalErr)
+	}
 
-	// 构建 DLQ 消息
-	dlqMsg := DLQMessage{
+	return &DLQMessage{
 		OriginalTopic:     msg.Topic,
 		OriginalPartition: msg.Partition,
 		OriginalOffset:    msg.Offset,
@@ -91,49 +90,58 @@ func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage
 		FileHash:  payload.Sha1,
 		ObjectKey: payload.OssKey,
 		EventID:   payload.EventID,
+	}, nil
+}
+
+// SendToDLQ 发送消息到死信队列
+func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) error {
+	dlqMsg, buildErr := buildDLQMessage(msg, err, retryCount)
+	if buildErr != nil {
+		p.logger.Error("Failed to build DLQ message", zap.Error(buildErr))
+		return buildErr
 	}
 
 	// 序列化 DLQ 消息
-	dlqValue, err := json.Marshal(dlqMsg)
-	if err != nil {
-		p.logger.Error("Failed to marshal DLQ message", zap.Error(err))
-		return err
+	dlqValue, marshalErr := json.Marshal(dlqMsg)
+	if marshalErr != nil {
+		p.logger.Error("Failed to marshal DLQ message", zap.Error(marshalErr))
+		return marshalErr
 	}
 
 	// 发送到 Kafka DLQ topic
 	kafkaMsg := &sarama.ProducerMessage{
 		Topic: p.dlqTopic,
-		Key:   sarama.StringEncoder(payload.EventID),
+		Key:   sarama.StringEncoder(dlqMsg.EventID),
 		Value: sarama.ByteEncoder(dlqValue),
 		Headers: []sarama.RecordHeader{
 			{Key: []byte("x-dlq-source"), Value: []byte(msg.Topic)},
-			{Key: []byte("x-dlq-timestamp"), Value: []byte(now.Format(time.RFC3339))},
+			{Key: []byte("x-dlq-timestamp"), Value: []byte(dlqMsg.LastFailedAt.Format(time.RFC3339))},
 			{Key: []byte("x-error-category"), Value: []byte(dlqMsg.ErrorCategory)},
 		},
 	}
 
-	partition, offset, err := p.producer.SendMessage(kafkaMsg)
-	if err != nil {
+	partition, offset, sendErr := p.producer.SendMessage(kafkaMsg)
+	if sendErr != nil {
 		p.logger.Error("Failed to send message to DLQ",
-			zap.Error(err),
-			zap.String("event_id", payload.EventID),
+			zap.Error(sendErr),
+			zap.String("event_id", dlqMsg.EventID),
 			zap.Int64("original_offset", msg.Offset))
-		return err
+		return sendErr
 	}
 
 	p.logger.Info("Message sent to DLQ",
-		zap.String("event_id", payload.EventID),
+		zap.String("event_id", dlqMsg.EventID),
 		zap.Int32("dlq_partition", partition),
 		zap.Int64("dlq_offset", offset),
 		zap.Int64("original_offset", msg.Offset),
 		zap.String("error_category", dlqMsg.ErrorCategory))
 
 	// 持久化到 MySQL（事务中同时更新 Inbox）
-	if err := p.persistToDB(ctx, &dlqMsg); err != nil {
+	if persistErr := p.persistToDB(ctx, dlqMsg); persistErr != nil {
 		p.logger.Error("Failed to persist DLQ message to DB",
-			zap.Error(err),
-			zap.String("event_id", payload.EventID))
-		// 不返回错误，因为已经发送到 Kafka DLQ
+			zap.Error(persistErr),
+			zap.String("event_id", dlqMsg.EventID))
+		return persistErr
 	}
 
 	return nil

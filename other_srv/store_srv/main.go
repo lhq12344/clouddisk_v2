@@ -46,7 +46,7 @@ func main() {
 	cfg.Version = sarama.V3_5_0_0
 	cfg.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRange
 	cfg.Consumer.Offsets.Initial = sarama.OffsetNewest
-	cfg.Consumer.Offsets.AutoCommit.Enable = true
+	cfg.Consumer.Offsets.AutoCommit.Enable = false
 	cfg.Consumer.Offsets.AutoCommit.Interval = 1 * time.Second
 	cfg.Consumer.Return.Errors = true
 
