@@ -1,0 +1,387 @@
+# 10. 文档下载、预览、阅读：从文件列表到预签名 URL
+
+## 本章定位
+
+下载/预览的核心不是 gateway 读取文件并返回，而是 file service 做 owner/status 校验后，生成 MinIO presigned GET URL。浏览器再用这个 URL 下载、预览或拉取文本内容。业务授权在 file service，字节传输在对象存储。
+
+总链路：`App 文件列表 -> ApiService.getDownloadUrl/getPreviewUrl -> Drogon FileController -> file_srv Download/Showfile -> MinIOPresignGetURLWithParams -> browser open/fetch`。
+
+这条链路的两个入口 `/file/download` 和 `/file/showfile` 都是普通 POST 路由，挂在 `jwt_decode` filter 之后：
+
+代码证据：`forward_part/gateway/controllers/FileController.h:30-40`
+
+```cpp
+	ADD_METHOD_TO(FileController::filequeryinfo, "/file/query", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::filedowm, "/file/download", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	ADD_METHOD_TO(FileController::Status, "/file/Status", Post, "jwt_decode");
+```
+
+解释：
+
+- 下载/预览接口与其它文件接口一样必须过 JWT 鉴权，用户身份由 filter 注入，不来自前端请求体。
+- 注意接口名是"filedowm"（源码如此拼写，与 Go 侧 `Filedowm` 方法一一对应），搜索时不要按 `fileDownload` 找。
+- nginx 层为这两个路径各配了精确匹配转发（`forward_part/config/nginx/nginx.conf:148-160`），请求从 `:2024` 直接到 gateway。
+
+## 源码精读：文件列表提供可读状态
+
+前端的 `FileItem` 包含文件名、hash、size、status、scan_detail、content_type 等字段：
+
+代码证据：`forward_part/static/types.ts:13-21`
+
+```ts
+export interface FileItem {
+  filename: string;
+  filehash: string;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+这些字段来自 file service 查询结果。`status` 不是 UI 装饰，它直接影响下载/预览按钮是否开放，也会提示用户文件是否还在扫描或扫描失败。
+
+`FileItem` 的字段由 Go 侧 `Filequeryinfo` 逐字段填充，`Status/ScanDetail/ContentType` 直接来自 `File` 表的真实列：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:891-918`（Filequeryinfo 响应构建）
+
+```go
+	for _, uf := range ufs {
+		if uf.File.ID == 0 {
+			internal.Logger.Warn("[Filequeryinfo]skip dangling relation",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	return resp, nil
+```
+
+解释：
+
+- `uf.File.Status` 就是扫描状态，`backword_part/model/filedb.go:9-14` 定义了四个值：`pending_scan / success / infected / scan_failed`。
+- 对已经 `success` 的文件，列表接口还会顺手调 `ensureStoredObjectAvailable` 做一次对象存在性检查——对象丢失时会触发 `markFileObjectMissing`，把文件标记为 `scan_failed`，列表页立刻可见异常。
+- `FileInfo` 的 `Status/ScanDetail/ContentType` 与前端 `FileItem` 字段一一对应，这是"文件列表提供可读状态"的直接证据。
+
+网关把 proto 的 `FileInfo` 转成前端 JSON 时保留全部字段：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:472-489`
+
+```cpp
+									 Json::Value ret;
+									 ret["status"] = response->code();
+									 ret["message"] = response->message();
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+									 }
+```
+
+解释：`status / scan_detail / content_type` 三个字段从 Go gRPC 响应原样透传到浏览器 JSON，中间没有任何改写，前端拿到的状态就是数据库里的状态。
+
+## 源码精读：前端只有 success 才开放下载/预览
+
+`forward_part/static/App.tsx` 的可用性判断非常直接：
+
+代码证据：`forward_part/static/App.tsx:335-364`
+
+```ts
+  const isFileAvailable = (file: FileItem) => file.status === 'success';
+
+  const formatFileStatus = (file: FileItem) => {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  };
+```
+
+解释：
+
+- `isFileAvailable` 只认 `success` 一个值；`pending_scan` 显示琥珀色 "Scanning"，`infected/scan_failed` 显示红色，都与按钮的 disabled 状态联动。
+- App.tsx 里还有一段待扫描轮询（App.tsx:194-200）：列表中存在 `pending_scan` 文件时每 3 秒刷新一次文件列表，扫描完成后按钮自动解禁——这就是前端"扫描中"体验的来源。
+
+按钮层面把 `disabled={!isFileAvailable(file)}` 直接绑在预览/下载按钮上：
+
+代码证据：`forward_part/static/App.tsx:480-491`（svg 图标已省略）
+
+```tsx
+                          <button
+                            onClick={() => handlePreview(file)}
+                            disabled={!isFileAvailable(file)}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+                          >...</button>
+```
+
+解释：这只是前端 UX 门禁，不能作为安全边界。真正的安全判断在 file service，因为用户可以绕过前端直接请求 `/file/download` 或 `/file/showfile`——这也是为什么后端必须重复校验。
+
+## 源码精读：下载 API 请求的是 URL，不是文件内容
+
+`forward_part/static/services/api.ts` 的下载方法只发送文件身份信息：
+
+代码证据：`forward_part/static/services/api.ts:154-163`（getDownloadUrl）
+
+```ts
+  async getDownloadUrl(file: FileItem) {
+    return this.request('/file/download', { 
+      method: 'POST', 
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  }
+```
+
+解释：请求体只有 `filename / filehash / file_size` 三个身份字段。这证明 `/file/download` 是"签 URL 接口"，不是"传文件接口"。因此排查下载慢时，业务 API 和 MinIO 对象传输要分开看：业务 API 慢可能是 DB/鉴权/签名；文件传输慢可能是 MinIO 或网络。
+
+拿到 `download_url` 后，前端用隐藏 `<a>` 标签触发浏览器下载（不做任何字节搬运）：
+
+代码证据：`forward_part/static/App.tsx:239-252`（handleDownload）
+
+```ts
+  const handleDownload = async (file: FileItem) => {
+    setLoading(true);
+    try {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  };
+```
+
+解释：`triggerBrowserDownload`（App.tsx:84-92）创建一个临时 `<a>` 并 `link.click()`——它**没有**设置 `download` 属性，强制下载完全依赖预签名 URL 响应头里的 `Content-Disposition: attachment`。预签名 URL 指向 `127.0.0.1:30900`（本地 MinIO NodePort）时，会先经 `rewriteMinioUrl`（App.tsx:63-74）改写 host 再触发。
+
+gateway 侧 `filedowm` 把 JSON 请求体转成 proto 请求，并把用户身份从 JWT attributes 填进去：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:517-528`
+
+```cpp
+	auto jsonPtr = req->getJsonObject();
+	if (!jsonPtr)
+	{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	context->AddMetadata("x-request-id", rid);
+```
+
+解释：注意 `userid` 不是从请求体取的，而是 `getArgumentsFromJWT` 从 filter 注入的 `ID` attribute 转换而来——前端无法伪造他人身份下载。
+
+gRPC 返回后，gateway 把业务码翻译成 HTTP 语义：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:537-552`
+
+```cpp
+								if (!status.ok())
+								{
+									callback(grpcErrorResponse(status));
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+								callback(makeJsonResponse(ret, k200OK));
+```
+
+解释：
+
+- 传输层错误（gRPC 调不通）走 `grpcErrorResponse`；业务层失败（如文件未就绪）被翻译成 HTTP 409 + `download_unavailable`。
+- 成功时响应体就是 `{"download_url": "<presigned GET URL>", "filename": ...}`，整个响应不包含任何文件字节。
+
+## 源码精读：file service 同时校验 owner 和扫描状态
+
+`backword_part/file_server/file_srv/protobuf/file.go` 的下载实现会先查当前用户是否拥有该文件，再检查关联 `File.status`：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:591-628`（Filedowm 下载入口）
+
+```go
+func (f FileServer) Filedowm(ctx context.Context, req *ReqFileDown) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, internal.Logger)
+	account, err := ensureAccount(ctx, req.Userid)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释（这一步是本小节核心，下载之前一共过三道门）：
+
+- 第一道门：`findOwnedUserFile` 以 `account.ID + filename`（可选 `filehash`）查 `UserFile`，不存在返回 404。**任何不属于当前用户的文件都到不了签名环节**。
+- 第二道门：`file.Status != model.FileSuccess` 返回 409，消息由 `fileUnavailableMessage`（file.go:461-482）按状态生成——`pending_scan` 返回 "file is pending virus scan"，`infected/scan_failed` 优先返回 `ScanDetail` 详情。
+- 第三道门：`ensureStoredObjectAvailable` 确认对象真实存在，对象缺失时把文件标记为 `scan_failed`（`markFileObjectMissing`，file.go:484-511），返回 409。
+- 三道门全过才调 `buildPresignedGetURL` 签名，URL 放进 `Resp.Message` 返回。
+
+owner 校验的查询长什么样：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:553-573`（findOwnedUserFile）
+
+```go
+func findOwnedUserFile(ctx context.Context, accountID uint, filename, fileHash string) (*model.UserFile, error) {
+	var uf model.UserFile
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `account_id` 条件是硬编码的，filename/filehash 只是附加过滤；**即使请求方知道别人的文件名和 hash，也匹配不到行**。
+- `Preload("File")` 把关联的 `File` 记录（含 status/object_key/content_type）一并查出，`file.Status` 才能直接判断。
+- 文件去重是"一文件多用户"（同一 sha1 对应多个 UserFile），所以必须用 `user_files` 表而不是 `files` 表来校验拥有关系。
+
+对象存在性检查：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:513-551`（ensureStoredObjectAvailable）
+
+```go
+func ensureStoredObjectAvailable(ctx context.Context, file *model.File) (string, error) {
+	if file == nil || file.ID == 0 {
+		return "", gorm.ErrRecordNotFound
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `MinIOObjectExists` 底层是 `StatObject`（internal/minio.go:127-140），用 `NoSuchKey/NotFound` 判定对象不存在。
+- 对象缺失不是只报错，而是写库标记 `scan_failed` + `scan_detail="file object missing in storage"`，让文件列表页直接可见异常。
+- 对象存在但 DB 里 object_key 为空（历史脏数据）时，顺手把 key 补写回 `File` 表。
+
+## 源码精读：预览和下载共用对象读取，差异是 disposition
+
+预览同样要求 `success`，但签的是 inline 展示 URL：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:771-804`（Showfile）
+
+```go
+func (f FileServer) Showfile(ctx context.Context, req *Reqshowfile) (*Resp, error) {
+	account, err := ensureAccount(ctx, req.Userid)
+	if err != nil {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：`Showfile` 与 `Filedowm` 唯一实质差异是签名时传 `buildInlineContentDisposition` 而非 `buildAttachmentContentDisposition`。因此"下载"和"预览"不是两条独立的文件读取链路，而是同一 MinIO presigned GET 能力的两种 HTTP header 语义。gateway 侧 `/file/showfile` 的响应映射与 download 一致（FileController.cc:649-658），业务失败翻译为 HTTP 409 `preview_unavailable`。
+
+两种 disposition 的构造：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:61-73`
+
+```go
+func buildAttachmentContentDisposition(filename string) string {
+	name := strings.ReplaceAll(filename, `"`, "")
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `attachment` 让浏览器强制下载；`inline` 让浏览器尝试在窗口内渲染。
+- 两处都做了注入防护：attachment 只过滤双引号；inline 额外剔除 `\r\n`，防止 filename 夹带响应头注入。
+- `filename*=UTF-8''` 是 RFC 5987 形式，保证中文文件名在响应头里不被破坏。
+
+disposition 通过预签名 URL 的 query 参数传给对象存储：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:89-98`（buildPresignedGetURL）
+
+```go
+func buildPresignedGetURL(objectKey, filename, contentDisposition, contentType string) (string, error) {
+	reqParams := make(url.Values)
+	if contentDisposition != "" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`internal/minio.go:178-188`（MinIOPresignGetURLWithParams）
+
+```go
+func (c *MINIOClient) MinIOPresignGetURLWithParams(objectKey string, expiry time.Duration, reqParams url.Values) (string, error) {
+	if c == nil || c.Client == nil {
+		return "", fmt.Errorf("minio client is nil")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 签名时把 `response-content-disposition` / `response-content-type` 作为 query 参数写进 URL，MinIO 返回对象时会用这两个响应头覆盖对象本身的 header。
+- 过期时间是 10 分钟（`10*time.Minute`），URL 只对拿到它的会话短期有效。
+- 字节本身仍然在 MinIO，file service 全程只操作 URL，不读不写文件内容。
+
+## 源码精读：在线阅读是前端拿 preview URL 后 fetch 文本
+
+`App.tsx` 的阅读/编辑逻辑拿到 `preview_url` 后，用浏览器 fetch 文本内容：
+
+代码证据：`forward_part/static/App.tsx:211-237`（handlePreview）
+
+```ts
+  const handlePreview = async (file: FileItem) => {
+    setLoading(true);
+    try {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  };
+```
+
+解释：
+
+- 前端先判断"是不是文本可预览"：`isTextPreviewable`（App.tsx:58-61）检查扩展名白名单 `TEXT_PREVIEW_EXTENSIONS`（App.tsx:15-39，覆盖 md/txt/json/js/ts/py/go 等）或 content_type 命中 `text/*|json|javascript|xml|yaml|csv|svg`（`isTextContentType`，App.tsx:47-56）；非文本文件直接 `window.open` 外部打开（`openExternalUrl`，App.tsx:76-82）。
+- 文本文件则 `fetch` 预签名 URL 拉全文，进入编辑模式（`.md` 文件还有本地 markdown 渲染 `renderMarkdown`，App.tsx:310-320）。
+- 这说明当前"文档阅读"主要是文本类文件在线读取。复杂 Office/PDF 渲染不是这段源码能证明的能力，不应在学习笔记中扩展成独立文档解析系统。
+
+本地开发时预签名 URL 的 host 是 `127.0.0.1:30900`（MinIO NodePort），浏览器 fetch 会命中系统代理，所以前端把 host 改写为 Vite dev server，再走 Vite 代理：
+
+代码证据：`forward_part/static/App.tsx:63-74`（rewriteMinioUrl）
+
+```ts
+const rewriteMinioUrl = (url: string) => {
+  try {
+    const u = new URL(url);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+};
+```
+
+代码证据：`forward_part/static/vite.config.ts:29-35`（/clouddisk 代理）
+
+```ts
+          // Proxy MinIO presigned upload URLs through Vite dev server
+          // to avoid system proxy (127.0.0.1:7890) intercepting NodePort traffic.
+          // changeOrigin: false preserves the original Host header for MinIO signature validation.
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+          },
+```
+
+解释：改写后的 `http://localhost:3000/clouddisk/files/<hash>?X-Amz-...` 由 Vite 代理转发到 MinIO（bucket 名是 `clouddisk`，object key 是 `files/<hash>`），预签名 query 参数原样保留，MinIO 校验签名后返回对象字节。
+
+nginx 还提供了一组本地直读的 preview/download alias（监听 2025 端口的另一个 `server` 块，以本地文件系统 `storage/` 为根，按 `$arg_filename` 覆盖 Content-Disposition）：
+
+代码证据：`forward_part/config/nginx/nginx.conf:247-268`
+
+```nginx
+	location /preview/ {
+		alias /home/lihaoqian/project/clouddisk_v2/storage/;
+		autoindex off;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+	}
+```
+
+解释：
+
+- 与主入口 `:2024` 不同，这两个 location 直接从磁盘 `storage/` 目录按对象 key 别名取文件，是本地开发/调试时的旁路预览通道。
+- 这里的 inline/attachment 语义与 Go 侧 disposition 构建完全一致——两处各自独立实现同一套"inline 预览 / attachment 下载"约定。
+- 该 `server` 块没有鉴权，只应在开发环境暴露，不属于生产链路。
+
+## 状态转换
+
+下载/预览链路关心的是文件可读状态，不关心上传任务进度。
+
+```text
+pending_scan -> store service 扫描 clean -> success -> file service 允许签 presigned GET URL
+pending_scan -> ClamAV FOUND -> infected -> file service 返回 409，前端禁用下载/预览
+pending_scan -> 扫描失败耗尽重试 -> scan_failed -> file service 返回 409，等待排障/重试
+success -> 用户请求下载 -> attachment presigned URL -> 浏览器下载
+success -> 用户请求预览 -> inline presigned URL -> 浏览器打开或前端 fetch 文本
+```
+
+前端的 `isFileAvailable(file.status === 'success')` 是 UX 门禁；后端 `file.Status != model.FileSuccess` 是真正安全门禁。两者必须同时存在，因为前端状态可以被绕过。
+
+## 关键数据结构 / 字段
+
+- `FileItem.status`：前端列表判断能否下载/预览的直接依据。
+- `FileItem.scan_detail`：感染或扫描失败时展示给用户/排障人员的原因。
+- `UserFile.filename + filehash`：file service 查 owner 关系的业务 key。
+- `File.object_key`：签 MinIO GET URL 的对象位置。
+- `Content-Disposition`：下载用 `attachment`，预览用 `inline`。
+- `Resp.Message / download_url / preview_url`：业务 API 返回的不是文件内容，而是短期有效 URL。
+
+## 常见误判与排障顺序
+
+- 误判：下载接口应该返回文件二进制。正确理解：后端只签 URL，对象字节由 MinIO 返回。
+- 误判：前端禁用按钮就是安全边界。正确理解：file service 必须再次校验 owner 和 `FileSuccess`。
+- 误判：预览等于完整文档解析。正确理解：当前主要是 inline URL 或前端 fetch 文本，复杂文档解析不是当前源码能力。
+- 排障顺序：文件列表 status -> 前端按钮门禁 -> Drogon `/file/download`/`/file/showfile` -> file service owner/status 校验 -> MinIO presigned URL -> 浏览器访问/URL rewrite。
+
+## 阅读检查
+
+- 能画出 `App 文件列表 -> getDownloadUrl/getPreviewUrl -> Drogon /file/download|/file/showfile -> file_srv Filedowm|Showfile -> presigned GET URL -> browser` 完整链路。
+- 能说明下载/预览为什么返回 presigned URL 而不是文件内容。
+- 能解释前端 `isFileAvailable`（UX 门禁）和后端 `FileSuccess` 校验（安全边界）的区别，以及后端三道门（owner 校验 / status 校验 / 对象存在性校验）各自对应的代码位置。
+- 能讲清 `attachment` 与 `inline` 对浏览器行为的影响，以及 disposition 通过预签名 URL 的 `response-content-disposition` query 参数传递。
+- 能定位 `getDownloadUrl`、`getPreviewUrl`、`Filedowm/Showfile`、`findOwnedUserFile`、`ensureStoredObjectAvailable`、`buildPresignedGetURL`、`MinIOPresignGetURLWithParams`。
+- 能解释前端在线阅读文本的 fetch 路径（`rewriteMinioUrl` + Vite `/clouddisk` 代理），并知道非文本文件走 `window.open`。

@@ -1,0 +1,442 @@
+# 11. 分片上传与断点续传：大文件为什么这样设计
+
+## 本章定位
+
+大文件不走小文件的单个 gRPC stream，而走 multipart 控制面：file service 创建 session、签 part URL、查询已上传 parts、complete 对象；浏览器或 gateway 代理负责把每片 PUT 到 MinIO。断点续传的可信状态来自 Redis session + MinIO list parts，不来自前端本地进度条。
+
+总链路：`UploadManager -> initMultipart -> status/list parts -> presignParts -> PUT parts -> status -> completeMultipart -> upsert File/UserFile -> Outbox scan`。
+
+multipart 的五个控制面接口全部是普通 POST RPC，路由挂在 `jwt_decode` filter 之后：
+
+代码证据：`forward_part/gateway/controllers/FileController.h:35-40`
+
+```cpp
+	ADD_METHOD_TO(FileController::Initupload, "/file/initupload", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::PresignParts, "/file/PresignParts", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::Uploadpart, "/file/uploadpart", Post, "jwt_decode");
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	ADD_METHOD_TO(FileController::Status, "/file/Status", Post, "jwt_decode");
+```
+
+解释：
+
+- `Initupload / PresignParts / CompleteMultipart / AbortMultipart / Status` 五条是"控制面"：只传元数据（upload_id、part_numbers），不携带分片字节。
+- `/file/uploadpart` 是唯一沾"数据面"的路径，但它是预签名 URL 的 HTTP 代理，不是 gRPC stream（见后文"UploadPart(stream) 已废弃"）。
+- nginx 为这些路径配了精确匹配转发，其中 `/file/uploadpart` 关闭了请求缓冲（nginx.conf:176-183 的 `proxy_request_buffering off; proxy_buffering off;`），因为要透传大块 body。
+
+## 源码精读：前端本地 session 只是恢复入口
+
+`forward_part/static/components/UploadManager.tsx` 会尝试按 file hash 恢复 multipart session，没有才创建：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:162-177`（uploadMultipart 开头）
+
+```ts
+  const uploadMultipart = async (file: File, fileHash: string, taskId: string) => {
+    let session = getMultipartSession(fileHash);
+    if (!session) {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    const uploadedParts = new Set<number>(statusResp.uploaded_parts || []);
+```
+
+解释：
+
+- 恢复后立即查 `getMultipartStatus`。这说明 localStorage/sessionStorage 只帮前端找回 `upload_id`，不能证明某个 part 已经上传成功。
+- 如果 `Status` 查询本身失败（session 过期/被清理），前端会丢弃本地 session 并重新 init——本地状态永远不构成上传成功的依据。
+
+session 的持久化位置和格式：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:32-52`（loadMultipartSessions）
+
+```ts
+const loadMultipartSessions = (): Record<string, MultipartSession> => {
+  const key = multipartSessionStorageKey();
+  try {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+};
+```
+
+解释：
+
+- 存储 key 是 `multipart_upload_sessions:<token 前 16 字符>`（UploadManager.tsx:19-22），按用户隔离。
+- 默认存 sessionStorage（关标签页即失忆，见 `multipartSessionStorage`，UploadManager.tsx:24），并兼容迁移旧的 localStorage 会话。
+- session 内容只有 `{upload_id, part_size, total_parts}`（`MultipartSession` 接口，UploadManager.tsx:9-13），没有任何"哪些片传完了"的信息。
+
+session 的创建：`buildMultipartSession` 调 `initMultipart` 并把返回值写入本地存储：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:136-160`（buildMultipartSession）
+
+```ts
+  const buildMultipartSession = async (file: File, fileHash: string): Promise<MultipartSession> => {
+    let init: MultipartInitResponse;
+    try {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  };
+```
+
+解释：
+
+- `init.status !== 'init'` 时抛错：说明 `InitMultipart` 可能直接返回"文件已存在"（复用对象），前端据此走复用分支而不是继续分片。
+- 缺少 `upload_id / part_size / total_parts` 任一字段都会中止，这三个值同时是切片计算和续传进度的依据。
+
+## 源码精读：缺失 part 才申请 URL 和上传
+
+前端根据服务端返回的 `uploaded_parts` 跳过已完成分片，只对缺失 part 申请 presigned URL：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:185-209`
+
+```ts
+    const missingParts: number[] = [];
+    for (let partNumber = 1; partNumber <= session.total_parts; partNumber++) {
+      if (!uploadedParts.has(partNumber)) {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    }
+```
+
+解释：
+
+- `missingParts` 由 `total_parts - uploadedParts` 推导，part 号从 1 开始（与 S3 multipart 约定一致）。
+- `PART_PARALLELISM = 2`（UploadManager.tsx:16），每批最多 2 个 part 并行 PUT，控制带宽占用；批次切分见 `chunkNumbers`（UploadManager.tsx:74-80）。
+- `refreshProgress`（UploadManager.tsx:178-183）用 `uploadedParts.size / session.total_parts` 算进度，是一个纯前端估读；真正的进度权威在 MinIO（见"Status"一节）。
+- 全部批次完成后调用 `completeMultipart` 并 `clearMultipartSession`（UploadManager.tsx:211-212）——本地 session 的使命到此结束。
+
+`uploadPresignedPart` 有两套执行路径：
+
+代码证据：`forward_part/static/services/api.ts:214-254`（uploadPresignedPart）
+
+```ts
+  async uploadPresignedPart(url: string, body: Blob) {
+    if (isLoopbackPresignedUrl(url)) {
+      const token = this.getToken();
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  }
+```
+
+解释：
+
+- 路径 A（预签名 URL 的 host 是 `127.0.0.1/localhost`，`isLoopbackPresignedUrl` 见 api.ts:18-27）：把 part body POST 给 `/file/uploadpart`，预签名 URL 放在 `X-Presigned-Part-Url` header，由 gateway 代理 PUT。这是本地开发（MinIO NodePort 在 127.0.0.1:30900）绕开浏览器系统代理的走法。
+- 路径 B（其余情况）：浏览器直接对预签名 URL 发 `PUT`，这是生产主路径——浏览器 → MinIO，业务服务不碰 part 字节。
+- 两条路径都返回 ETag。前端目前只把 ETag 用于容错返回，但 complete 阶段它其实是必要输入（见"CompleteMultipart"一节）。
+
+presign 请求本身是纯控制面：
+
+代码证据：`forward_part/static/services/api.ts:207-212`（presignParts）
+
+```ts
+  async presignParts(upload_id: string, part_numbers: number[]): Promise<PresignPartsResponse> {
+    return this.request('/file/PresignParts', {
+      method: 'POST',
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  }
+```
+
+解释：`PresignPartsResponse`（types.ts:49-52）返回 `parts: {part_number, url, expires_at}[]`，前端按 part 号映射成 `partMap` 再逐片上传。
+
+## 源码精读：InitMultipart 同时创建业务 upload_id 和 MinIO upload_id
+
+`backword_part/file_server/file_srv/protobuf/file.go` 的 `InitMultipart` 构造 object key，调用 MinIO 初始化 multipart，并把会话 meta 写进 Redis：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:993-1043`（InitMultipart 主体）
+
+```go
+	totalParts, partSize, _, err := minio.OptimalPartInfo(req.FileSize, 0)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "OptimalPartInfo: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释（InitMultipart 是整个 multipart 会话的"总开关"）：
+
+- `minio.OptimalPartInfo(fileSize, 0)` 按文件大小计算最优 part 大小和片数；兜底 `totalParts=1, partSize=fileSize`。
+- `genUploadID()` 生成的是**业务侧 upload_id**（32 位 hex）；`MinIOMultipartInit` 返回的是 **MinIO 侧 oss_upload_id**。两个 id 通过 Redis meta 的 `oss_upload_id` 字段绑定，前端全程只认业务 upload_id，不接触 MinIO id。
+- Redis meta 用 `TxPipelined` 一次写 10 个字段 + `Expire(24h)`（`defaultTTL`，file.go:34）。这些字段分别承担不同职责：`user_id` 做 owner 校验，`object_key/oss_upload_id` 对接 MinIO，`part_size/total_parts` 用于前端切片和 complete 前校验，`status` 记录会话是否已 completed。
+- 如果 Redis 写入失败，回滚调用 `MinIOMultipartAbort` 清理 MinIO 侧 upload，避免孤儿 session。
+- 注意 InitMultipart 开头（file.go:977-991）会先按 file_hash 查 `files` 表：文件已存在时直接复用对象并返回（`reuseMessage`，file.go:113-130），不创建新 multipart——这是哈希去重在 multipart 入口的体现。
+
+id 与 key 的生成规则：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:49-59`
+
+```go
+func genUploadID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 业务 upload_id 是随机 16 字节 hex（32 字符），不可预测、不可枚举；Redis key 为 `mp:meta:<uploadID>`（`metaKeyPrefix`，file.go:33）。
+- object key 统一为 `files/<file_hash>`——与哈希去重一致：同一内容永远只落一个对象（多用户共享）。
+
+MinIO 侧的初始化封装：
+
+代码证据：`internal/minio.go:208-230`（MinIOMultipartInit）
+
+```go
+func (c *MINIOClient) MinIOMultipartInit(
+	ctx context.Context,
+	objectKey string,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：`minio.Core` 是 minio-go 的底层 API 封装，`NewMultipartUpload` 对应 S3 `POST /<bucket>/<key>?uploads`，返回的 uploadID 是后续所有 part 操作（PUT part、list parts、complete）的必需参数。
+
+## 源码精读：PresignParts 是控制面，不传输数据面
+
+`PresignParts` 读取 Redis meta 后，为每个 part number 生成 MinIO PUT URL：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1046-1087`（PresignParts）
+
+```go
+func (s FileServer) PresignParts(ctx context.Context, req *PresignPartsReq) (*PresignPartsResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 先 `HMGet` Redis meta：session 不存在/过期直接 `NotFound`；owner 校验通过 `ensureMultipartOwner`（file.go:155-164）比较 gRPC 元数据里的 `x-user-id` 与会话 `user_id`，不匹配返回 `PermissionDenied`。
+- part_number 越界（`<=0` 或 `>total_parts`）返回 `InvalidArgument`，防止通过 part 号越权探测。
+- 每个 part 独立签 PUT URL，过期 `multipartPresignExpiry = 15 * time.Minute`（file.go:35），`expires_at` 一并返回给前端。
+- **整个函数不接收、不转发任何 part 字节**——它只确认"这个 upload_id 合法、你被允许上传这些 part"，数据面由浏览器直接打 MinIO。
+
+MinIO 侧签名：
+
+代码证据：`internal/minio.go:190-207`（MinIOPresignMultipartPutURL）
+
+```go
+func (c *MINIOClient) MinIOPresignMultipartPutURL(
+	ctx context.Context,
+	objectKey, uploadID string,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：预签名 PUT URL 形如 `http://minio/clouddisk/files/<hash>?partNumber=3&uploadId=<oss_upload_id>&X-Amz-...`。S3 协议要求 `partNumber` 与 `uploadId` 是 multipart part 上传的必要 query 参数，`Presign` 会把它们连同访问凭据一起签进签名（篡改任一参数都会导致签名校验失败）。
+
+gateway 转发时补上 `x-user-id` 元数据：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:757-766`（PresignParts 请求构造）
+
+```cpp
+	auto context = std::make_shared<::grpc::ClientContext>();
+	auto request = std::make_shared<::file::PresignPartsReq>();
+	auto response = std::make_shared<::file::PresignPartsResp>();
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		context->AddMetadata("x-user-id", std::to_string(userId));
+```
+
+解释：`x-user-id` 来自 JWT filter 注入的 `ID` attribute，`ensureMultipartOwner` 就是读这条 metadata 与会话 owner 比对。前端传什么 user 都没有用。
+
+## 源码精读：Status 以 MinIO 已上传 parts 为准
+
+断点续传的核心证据在 `Status`：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1211-1244`（Status）
+
+```go
+func (s FileServer) Status(ctx context.Context, req *StatusReq) (*StatusResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `Status` 只回答"MinIO 目前实际收到了哪些 part"：`listUploadedParts`（file.go:582-589）拉取对象存储上该 upload 的已完成 part 列表，转成 `UploadedParts` 数组。
+- 如果浏览器刷新前没保存进度，MinIO list parts 仍能恢复；如果前端误记某片成功但 PUT 失败（或部分字节未落盘），MinIO 不会返回该 part——**可信状态永远来自对象存储，而不是前端进度条**。
+- 与 `PresignParts` 相同的 owner 校验逻辑，保证不能探测别人的上传进度。
+
+list parts 的分页拉取：
+
+代码证据：`internal/minio.go:296-316`（MinIOMultipartListParts）
+
+```go
+func (c *MINIOClient) MinIOMultipartListParts(ctx context.Context, objectKey, uploadID string) ([]minio.ObjectPart, error) {
+	if c == nil || c.Client == nil {
+		return nil, fmt.Errorf("minio client is nil")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：`ListObjectParts` 每次最多 1000 片，用 `IsTruncated / NextPartNumberMarker` 循环翻页；返回前按 part 号升序排序（complete 阶段也要求升序）。对超大文件（几千片）这是 O(n) 元数据拉取，不碰字节。
+
+前端拿 `uploaded_parts` 恢复进度条：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:177-183`
+
+```ts
+    const uploadedParts = new Set<number>(statusResp.uploaded_parts || []);
+    const refreshProgress = () => {
+      updateTask(taskId, {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    refreshProgress();
+```
+
+解释：进度 = `已确认 part 数 / 总 part 数`。刷新页面后从 Redis session 找回 upload_id，再经 `Status` 从 MinIO 恢复真实进度——本地 session + 服务端确认，两者缺一不可。
+
+## 源码精读：UploadPart(stream) 已废弃，主链路是预签名直传
+
+proto/generated code 里还能看到 `UploadPart(stream)`，但 Go 实现明确返回未实现：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1089-1091`（UploadPart）
+
+```go
+func (s FileServer) UploadPart(stream FileService_UploadPartServer) error {
+	return status.Error(codes.Unimplemented, "deprecated, use PresignParts + direct multipart upload")
+}
+```
+
+解释：读代码时不能被 proto 迷惑。当前主链路是 `PresignParts + direct multipart upload`，分片字节**不经过** file service，也不经过 gRPC。
+
+本地或跨域受限时的替代路径：`/file/uploadpart` 由 Drogon 读取 `X-Presigned-Part-Url` header，把请求 body 原样代理 PUT 到预签名 URL：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:800-824`（Uploadpart 代理构造）
+
+```cpp
+	const auto uploadUrl = req->getHeader("X-Presigned-Part-Url");
+	if (uploadUrl.empty())
+	{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	upstreamReq->setBody(std::string(req->body()));
+```
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:834-858`（Uploadpart 回调）
+
+```cpp
+	client->sendRequest(
+		upstreamReq,
+		[callback = std::move(callback), rid](ReqResult result, const HttpResponsePtr &resp) mutable {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		120.0);
+```
+
+解释：
+
+- 网关把预签名 URL 拆成 host/path/query 三段（`parsePresignedUploadUrl`，FileController.cc:108-196），用 `drogon::HttpClient` 发起上游 `PUT`，body 是浏览器原始 part 字节。
+- `setPathEncode(false)` + 逐参数 set 是为了保证 query 里的签名参数（`X-Amz-*`、`uploadId`、`partNumber`）原样透传，任何二次编码都会破坏签名。
+- 代理目标有安全校验（FileController.cc:175-195）：host 只允许 `127.0.0.1 / localhost / 10.42.*`，路径必须含 `/clouddisk/` 且 query 必须同时含 `X-Amz-Algorithm=、uploadId=、partNumber=`——网关只代理"看起来像"预签名 part URL 的请求，防止被当开放代理滥用。
+- 上游返回的 `ETag` 原样回给前端；超时 120 秒（`sendRequest` 最后一个参数），大 part 慢传有足够余量。
+
+## 源码精读：CompleteMultipart 是最终业务提交点
+
+`CompleteMultipart` 会 list parts、校验数量、调用 MinIO complete，再落 `File/UserFile` 并写扫描 outbox。先看入口与幂等分支：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1093-1129`（CompleteMultipart 入口）
+
+```go
+func (s FileServer) CompleteMultipart(ctx context.Context, req *CompleteReq) (*CompleteResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- 相比 `PresignParts/Status`，这里 `HMGet` 取**全部** meta 字段——complete 需要把文件名/大小/hash 落进 `File` 表，所以业务元数据必须全量带回。
+- `status == "completed"` 是幂等分支：前端重试 complete（网络超时后）不会重复触发 MinIO complete 和 outbox，直接返回当前文件状态。
+
+然后校验分片完整性并完成对象：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1131-1177`（CompleteMultipart 主体）
+
+```go
+	parts, err := listUploadedParts(ctx, objectKey, ossUploadID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list multipart parts: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `len(parts) != totalParts` 直接失败（`FailedPrecondition`）：**part 数对不上，MinIO 根本不会执行 complete**，这是"必须传完全部片"的硬保证。
+- `MinIOMultipartComplete` 需要每个 part 的 `PartNumber + ETag`——ETag 正是前面 PUT part 时对象存储返回的（前端直传时从响应头拿到，网关代理时从 `resp->getHeader("ETag")` 拿到）。S3 协议要求 parts 按升序提交，`listUploadedParts` 已经排好序。
+- `upsertFileAndRelation`（file.go:255-419）在一个事务里完成：按 sha1 查/建 `File`（新记录默认 `pending_scan`）、恢复软删记录、补 `UserFile` 关系；需要扫描时写 `Outbox`（`enqueueScanRequested`，file.go:225-253，topic `file.upload.cmd`）。`requeueScan=false` 是有意的：只有新文件或复用 scan_failed 对象时才投递扫描事件。
+- complete 成功后 Redis 会话标记 `completed`（幂等分支依据），返回 `Status: file.Status`——**通常是 `pending_scan`**，直到 store service 消费 outbox 完成 ClamAV 扫描才变成 `success`。前端 UploadManager 也会对 `pending_scan` 任务每 3 秒轮询 `queryFiles` 更新状态（UploadManager.tsx:282-306）。
+- 落库失败时删除已 complete 的 MinIO 对象（`MinIODeleteObject`），避免"对象存在但无元数据"的孤儿对象。
+
+MinIO 侧 complete 封装：
+
+代码证据：`internal/minio.go:262-285`（MinIOMultipartComplete）
+
+```go
+func (c *MINIOClient) MinIOMultipartComplete(
+	ctx context.Context,
+	objectKey string,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：再次按升序排序兜底，然后 `CompleteMultipartUpload` 让对象存储把所有 part 拼接成最终对象。complete 是原子的：成功后 `files/<hash>` 就是一个完整可下载对象。
+
+与 complete 配套的取消路径 `AbortMultipart`：读 Redis meta 后中止 MinIO upload 并删除会话，对"会话不存在"幂等处理：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:1180-1209`（AbortMultipart）
+
+```go
+func (s FileServer) AbortMultipart(ctx context.Context, req *AbortReq) (*AbortResp, error) {
+	if req == nil || strings.TrimSpace(req.UploadId) == "" {
+		return nil, status.Error(codes.InvalidArgument, "missing upload_id")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 会话已不存在时（可能已被 TTL 清理）直接返回成功——abort 是尽力而为的清理操作，幂等。
+- 已 `completed` 的会话**不再** abort MinIO upload（对象已生成，abort 会把完整对象删掉），只删 Redis key。
+- 前端 `abortMultipart`（api.ts:263-268）走 `/file/AbortMultipart`，用于用户取消上传时回收 MinIO 上已上传的孤儿 part（这些 part 在 complete 前不产生可见对象，但会占用存储配额）。
+
+## 状态转换
+
+分片上传有三层状态：前端任务状态、Redis 会话状态、文件安全状态。
+
+```text
+用户选择大文件 -> hashing -> initialized -> uploading -> partial/resumable -> completed -> pending_scan
+pending_scan -> 扫描 clean -> success
+pending_scan -> 扫描 infected -> infected
+pending_scan -> 扫描失败耗尽重试 -> scan_failed/DLQ
+initialized/uploading -> 用户取消或异常清理 -> abort -> Redis meta 删除 + MinIO multipart abort
+```
+
+可信状态来源不同：
+
+```text
+localStorage/sessionStorage -> 只保存前端恢复入口 upload_id
+Redis meta -> 保存 owner、object_key、part_size、total_parts、oss_upload_id
+MinIO list parts -> 已上传 part 的事实来源
+MySQL File.status -> complete 后的安全状态来源
+```
+
+## 关键数据结构 / 字段
+
+- `upload_id`：file service 生成的业务会话 id，前端可见。
+- `oss_upload_id`：MinIO multipart upload id，存 Redis，不直接暴露为业务状态。
+- `part_size / total_parts`：前端切片和 complete 校验依据。
+- `uploaded_parts`：从 MinIO list parts 得到，是断点续传事实来源。
+- `object_key`：最终合并成一个 MinIO 对象的位置。
+- `File.status`：complete 后仍通常是 `pending_scan`，不是可读终态。
+
+## 常见误判与排障顺序
+
+- 误判：浏览器本地进度就是断点续传真相。正确理解：本地 session 只找回 upload_id，MinIO list parts 才是真相。
+- 误判：proto 里有 `UploadPart(stream)` 就是主链路。正确理解：Go 实现已返回 Unimplemented，主链路是 presigned PUT。
+- 误判：complete 后文件马上可下载。正确理解：complete 只表示对象合并完成，还要进入 `pending_scan`。
+- 排障顺序：InitMultipart Redis meta -> PresignParts owner 校验 -> PUT part/ETag -> Status list parts -> Complete parts 数量校验 -> DB/Outbox -> store scan。
+
+## 阅读检查
+
+- 能画出 `UploadManager -> initMultipart -> Status/list parts -> presignParts -> PUT parts（直传或 gateway 代理）-> Status -> completeMultipart -> upsert File/UserFile -> Outbox scan` 完整链路。
+- 能解释 Redis meta（业务会话）、MinIO upload id（对象存储会话）、本地 session（前端恢复入口）三者的区别与绑定关系。
+- 能说明为什么 `Status`（MinIO list parts）是断点续传的可信依据，前端进度条为什么只是估读。
+- 能明确 `UploadPart(stream)` 不是当前主链路（`file.go:1089-1091` 返回 `codes.Unimplemented`），以及 `/file/uploadpart` 是预签名 URL 的 HTTP 代理（含 host 白名单与路径/参数校验）。
+- 能从 `InitMultipart` 追到 `CompleteMultipart` 和 Outbox：part 数校验、ETag 收集、`upsertFileAndRelation` 事务、`requeueScan=false` 的语义。
+- 能说出 `AbortMultipart` 与 `CompleteMultipart` 的分工：前者回收未完成会话，后者幂等提交。

@@ -1,0 +1,301 @@
+# 16. AI 与 MCP 服务：网盘能力的智能扩展
+
+## 本章定位
+
+本章讲 AI 与 MCP 两个扩展入口如何接入网盘系统：AI 服务走 JWT 用户态和 gRPC；MCP 服务走 API key、中间件校验、限流和工具调用。这里只讲源码能证明的 wiring 和边界，不推断外部模型效果。
+
+## 边界声明
+
+本章只讲当前源码能证明的 wiring：HTTP/gRPC/API key/middleware/tools 如何连接。不要从源码外推外部模型质量、具体模型供应商效果或生产部署能力。
+
+## 总链路
+
+```text
+AI 链路：Client -> OpenResty -> Drogon AIController + jwt_decode -> FindService("AI_srv") -> gRPC AIrequest -> AI_server
+MCP 链路：MCP client -> mcp_server HTTP -> API key middleware -> rate limit/context -> Tools -> 业务能力
+```
+
+两条链路的鉴权方式不同：AI 复用 Web 登录后的 JWT 用户身份；MCP 面向工具/agent 调用，使用 API key，并通过 key 关联 user_id。
+
+这个边界在 proto 层面就写死了：AI 服务的 RPC 响应契约只有 `code/message/data` 三个字段，没有任何模型名、推理过程、质量评分字段。学习时能证明的只有"请求怎么组装、身份怎么传递、结果怎么回流"，而不是"模型答得好不好"。
+
+代码证据：`proto/AI_srv/ai.proto`
+
+```proto
+message AIResp {
+  int32  code    = 1;
+  string message = 2;
+  string data    = 3;
+}
+```
+
+解释：
+
+- `code/message/data` 与 file_srv 的响应风格一致，是网盘内部通用的业务响应格式。
+- proto 里没有模型供应商相关字段；调用哪个 DashScope 模型由环境变量 `DASHSCOPE_MODEL` 决定（`backword_part/AI_server/protobuf/ai.go` 的 `callDashScope`），这是部署期配置，不是协议契约。
+- 因此本章能验证的边界是 JWT/API key 怎么进、参数怎么传、结果怎么回流，而不是外部模型效果。
+
+## AI 服务链路
+
+AI 请求从前端或 HTTP client 进入 `/AI`，经过 Drogon `AIController`，挂 `jwt_decode` filter，取用户身份后转发到 Go `AI_srv` gRPC。
+
+路由注册在 controller 头文件里完成，和文件接口一样是 `ADD_METHOD_TO` + filter：
+
+代码证据：`forward_part/gateway/controllers/AIController.h`
+
+```cpp
+METHOD_LIST_BEGIN
+// use METHOD_ADD to add your custom processing function here;
+ADD_METHOD_TO(AIController::aiRequest, "/AI", Post, "jwt_decode");
+
+METHOD_LIST_END
+```
+
+controller 内部和服务发现方式与 FileController 完全同构——持有自己的 `KArcCache`，通过 `ArcGrpcLB::FindService` 从 Consul 取 `AI_srv` 的 stub：
+
+代码证据：`forward_part/gateway/controllers/AIController.cc`
+
+```cpp
+std::shared_ptr<AI::AIService::Stub>
+AIController::FindService(const std::string &key) const
+{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+Go 侧 `AI_srv` 的启动流程与 account/file 服务一致：随机端口只监听一次 → 注册 AIService → 注册 Consul → Serve：
+
+代码证据：`backword_part/AI_server/main.go`
+
+```go
+// ---- 2. 创建 gRPC Server ----
+grpcServer := grpc.NewServer(
+	grpc.UnaryInterceptor(internal.RequestIDUnaryInterceptor()),
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	port)
+```
+
+解释：
+
+- `ADD_METHOD_TO(..., "/AI", Post, "jwt_decode")` 说明 `/AI` 和文件接口一样先经过 JWT filter；controller 不自己解析 token。
+- `FindService("AI_srv")` 走统一的 ArcGrpcLB 缓存（TTL 10 秒），与 `FileController::FindService("file_srv")` 是同一套机制，key 与 Consul 注册名严格对应。
+- `AI_srv` 没有自己的 MySQL 表或独立业务模型，只依赖 Nacos/Consul 和外部 LLM/MCP 端点，因此它是典型的"能力扩展层"。
+
+## AI proto 字段
+
+AI 请求围绕用户和文件上下文：username、userid、filename、filehash、file_size、query。响应仍然遵循 code/message/data 风格。
+
+代码证据：`proto/AI_srv/ai.proto`
+
+```proto
+message AIReq{
+  string username  = 1;
+  string userid    = 2;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+这些字段在 gateway 侧由 JSON body 和 query 参数两路解析后填入（userid/username 来自 JWT 注入的 request attributes）：
+
+代码证据：`forward_part/gateway/controllers/AIController.cc`
+
+```cpp
+// 4) 构造 gRPC 请求
+auto context = std::make_shared<::grpc::ClientContext>();
+auto request = std::make_shared<::AI::AIReq>();
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	request->set_file_size(fileSize);
+```
+
+AI_srv 拿到请求后把它拼进 prompt，并提示模型"需要账号/文件数据时用工具拿"：
+
+代码证据：`backword_part/AI_server/protobuf/ai.go`（buildPrompt）
+
+```go
+func buildPrompt(req *AIReq) string {
+	if req == nil {
+		return "No request payload provided."
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- username/userid 来自 JWT 注入，不信任前端自报；filename/filehash/file_size 是可选"文件上下文"，可以不给，让模型通过 MCP 工具自己查。
+- gateway 在 `aiRequest` 里对 `userId <= 0` 或 username 为空做了强校验（返回 401），保证空身份不会继续往 gRPC 走。
+- buildPrompt 的注释点明了设计意图：文件上下文只是提示性的，权威数据仍要从工具调用拿。
+
+## MCP server 位置
+
+`backword_part/mcp_server` 是面向 agent/tool 的服务。它有 HTTP 入口、API key middleware、工具定义和数据模型。
+
+代码证据：`backword_part/mcp_server/main.go`
+
+```go
+mcpServer := server.NewMCPServer(
+	"clouddisk-backword",
+	"1.0.0",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+mux.Handle("/", sseServer)
+```
+
+MCP 的传输方式是 SSE：外部 agent 连 `/mcp/sse` 和 `/mcp/message`。AI_srv 正是用 mcp-go 的 SSE client 接上它的（`DefaultMCPSSEURL = "http://127.0.0.1:18090/mcp/sse"`）：
+
+代码证据：`backword_part/AI_server/protobuf/ai.go`（initMCP）
+
+```go
+headers := map[string]string{
+	"X-User-Id":  strings.TrimSpace(req.Userid),
+	"X-Username": strings.TrimSpace(req.Username),
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+defer rpcCancel()
+```
+
+解释：
+
+- mcp_server 通过 `RegisterGinService("mcp_srv", ...)` 注册到 Consul，是 HTTP/SSE 服务而非 gRPC 服务。
+- 同端口还挂 `/health`，因为 SSEServer 不自带健康检查端点。
+- AI_srv 通过 `X-User-Id/X-Username` header 把自己的用户身份透传给 MCP server，MCP server 据此把请求与具体用户绑定（见"与文件系统的关系"一节）。
+- SSE session 的 Start 用长寿命 context、RPC 才用短超时——这是 mcp-go 的使用约束，否则 SSE 连接会被提前取消。
+
+## MCP API Key 数据结构
+
+`mcp_api_key.go` 记录 key hash、prefix、status、expires、last used、rate limit、log 等字段。学习时重点理解：明文 key 不应长期存储，服务端通常保存 hash/prefix 以支持校验和展示。
+
+代码证据：`backword_part/model/mcp_api_key.go`
+
+```go
+type MCPAPIKey struct {
+	ID         uint            `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID     uint            `gorm:"not null;index:idx_user_status" json:"user_id"`
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+生成与校验都是"哈希对比"：明文只出现在生成那一刻，之后库里只有 sha256 哈希和 `mcp_xxxxxxxx` 前缀。
+
+代码证据：`backword_part/mcp_server/apikey/manager.go`（GenerateAPIKey / hashAPIKey）
+
+```go
+// 1. 生成随机 API Key
+apiKey, err := generateRandomKey()
+...
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+keyPrefix := apiKey[:len(APIKeyPrefix)+8] // mcp_xxxxxxxx
+```
+
+```go
+func hashAPIKey(apiKey string) string {
+	hash := sha256.Sum256([]byte(apiKey))
+	return hex.EncodeToString(hash[:])
+}
+```
+
+请求进来时由 middleware 完成"提取 → 校验 → 限流 → 注入 context"四步：
+
+代码证据：`backword_part/mcp_server/middleware/auth.go`
+
+```go
+// 1. 提取 API Key
+apiKey := extractAPIKey(r)
+if apiKey == "" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+ctx = context.WithValue(ctx, UserIDContextKey, key.UserID)
+```
+
+限流是 DB 窗口计数：`apikey/rate_limiter.go` 以分钟窗口在 `mcp_rate_limits` 表里计数，超过 `DefaultRateLimit`（60 次/分钟）拒绝。
+
+代码证据：`backword_part/mcp_server/apikey/rate_limiter.go`
+
+```go
+// 2. 查询或创建当前窗口的记录
+var rateLimit model.MCPRateLimit
+err := r.db.WithContext(ctx).
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `KeyHash` 带 `json:"-"`：任何 API 响应都不会把哈希返回给前端，展示用的只有 `key_prefix`。
+- `ValidateAPIKey` 按 sha256 哈希精确查询；明文 key 只存在调用方手里，生成后无法再读回明文（`apikey_handler.go` 的响应提示"请安全保存，不会再显示"）。
+- `GenerateAPIKey` 在事务里先撤销该用户全部 active key 再建新 key，保证一个用户同一时刻只有一个有效 key。
+- 限流与 key 校验都依赖 MySQL，所以 mcp_server 启动时必须能连上配置中心和 DB（`initDependenciesWithRetry` 最多重试 10 次）。
+
+## 与文件系统的关系
+
+AI/MCP 是网盘能力扩展层。它们依赖账号身份和文件上下文，但不应绕过文件服务的权限边界。凡是涉及文件读取、下载、hash、用户归属，都应回到既有 file/account 服务语义。
+
+MCP 工具本身不直接碰对象存储：每个工具先 `requireClaims` 从 context 取身份，再调用 account/file 的 gRPC 接口，权限判断仍然在 file_srv 里做。
+
+代码证据：`backword_part/mcp_server/Tools.go`
+
+```go
+s.AddTool(fileShowTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	claims, err := requireClaims(ctx)
+	if err != nil {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+})
+```
+
+claims 的来源是 SSE 请求头——mcp_server 在 `WithSSEContextFunc` 里从 `X-User-Id/X-Username` 构造 claims，而这两个 header 由 AI_srv 的 initMCP 注入，源头仍是 JWT 用户身份：
+
+代码证据：`backword_part/mcp_server/main.go`
+
+```go
+server.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+	uidStr := strings.TrimSpace(r.Header.Get("X-User-Id"))
+	uname := strings.TrimSpace(r.Header.Get("X-Username"))
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}),
+```
+
+解释：
+
+- 工具参数（filename/file_hash/file_size）来自模型生成的参数，但"这个用户能不能看这个文件"由 file_srv 决定，MCP 层只转发身份。
+- `requireClaims` 对缺失或非法 claims 直接返回工具错误，防止无身份调用。
+- 身份链路是：JWT（浏览器）→ gateway → AI_srv → SSE headers → mcp_server claims → file_srv gRPC。身份一路透传，没有引入新的信任边界。
+
+## 状态转换
+
+AI 请求状态：
+
+```text
+未携带 JWT / JWT 无效 -> Drogon jwt_decode 拒绝 -> AIrequest 不会发出
+JWT 有效 -> AIController 构造 AIReq -> gRPC AIrequest -> AIResp -> HTTP JSON 返回
+gRPC 服务不可用 -> Gateway 返回 service_unavailable / grpc_error
+```
+
+MCP API key 状态：
+
+```text
+active -> middleware 校验通过 -> context 注入 APIKey/UserID -> tool handler 执行
+active -> 超过 rate limit -> 请求被拒绝
+active -> expires_at 到期 -> expired -> 请求被拒绝
+active -> revoke -> revoked -> 请求被拒绝
+缺失/错误 key -> unauthorized
+```
+
+## 关键数据结构 / 字段
+
+- `AIReq.userid / username / filename / filehash / query`：AI 请求的用户与文件上下文。
+- `AIResp.code / message / data`：AI gRPC 响应风格。
+- `MCPAPIKey.key_hash`：服务端保存 hash，不长期保存明文 key。
+- `MCPAPIKey.key_prefix`：用于展示/识别 key，不暴露完整密钥。
+- `MCPAPIKey.status / expires_at / last_used_at`：控制 key 生命周期。
+- `MCPAPIKeyLog`：记录 key 使用行为，用于审计和排障。
+
+## 常见误判与排障顺序
+
+- 误判：AI/MCP 可以绕过网盘鉴权。正确理解：AI 走 JWT，MCP 走 API key；涉及文件能力仍应回到既有用户/文件边界。
+- 误判：MCP API key 等同 JWT。正确理解：JWT 是 Web 会话身份，API key 是工具调用凭证，生命周期和限流不同。
+- 误判：源码能证明模型效果。正确理解：源码只能证明接入链路和字段，不能证明外部模型质量。
+- 排障顺序：入口路由 -> JWT/API key 校验 -> request context -> service discovery/gRPC -> handler/tools -> 响应 code/message。
+
+## 阅读检查
+
+- 能说明 `/AI` 为什么也需要 JWT filter。
+- 能定位 MCP API key middleware。
+- 能区分源码证明的 wiring 和外部模型效果推测。
+- 能画出 `浏览器 → /AI(jwt_decode) → AIController → AI_srv gRPC → MCP SSE → file_srv` 的身份透传链。
+- 能解释为什么 MCP API key 只存 sha256 哈希和前缀，不存明文。

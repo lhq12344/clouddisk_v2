@@ -1,0 +1,332 @@
+# 15. 前端 API 和状态：UI 如何驱动后端能力
+
+## 本章定位
+
+前端不是纯展示层，而是后端能力的第一驱动者：它保存 JWT（`localStorage('oss_token')`）、统一封装 API 调用（token/request-id 注入）、计算文件 SHA-256 hash、维护上传任务状态机、判断文件是否可预览/下载，并在 multipart 上传中把 session 存进浏览器以便断点恢复。
+
+## 总链路
+
+前端把用户操作编排成后端能力调用：
+
+```text
+登录：AuthPage -> ApiService.signin -> localStorage oss_token -> request() 注入 Authorization
+文件列表：App.fetchFiles -> api.queryFiles -> FileItem[] -> pending_scan 轮询
+... 省略非关键行，完整证据见上文路径/锚点 ...
+文本编辑：preview fetch -> editContent -> sha256Hex -> simpleUpload 新内容
+```
+
+这说明前端是状态编排层：它不直接访问 MySQL/Kafka/ClamAV，但要理解后端状态并驱动正确 API 顺序。
+
+应用的挂载点逻辑在 `App.tsx`：未登录时渲染 `AuthPage`，登录成功后渲染文件列表 + `UploadManager`；所有 HTTP 出入都经过 `services/api.ts` 的 `ApiService` 单例。
+
+代码证据：`forward_part/static/App.tsx`（认证 gate，L322-324）
+
+```tsx
+if (!isAuthenticated) {
+  return <AuthPage onSuccess={() => setIsAuthenticated(true)} theme={theme} />;
+}
+```
+
+代码证据：`forward_part/static/services/api.ts`（单例导出，L278）
+
+```ts
+export const api = new ApiService();
+```
+
+解释：
+
+- `isAuthenticated` 初值来自 `localStorage.getItem('oss_token')` 是否存在（App.tsx L133），刷新页面后保持登录态。
+- `api` 是模块级单例，所有组件（AuthPage/UploadManager/App）共享同一份 token 读取与请求封装逻辑。
+- 登录态切换由 `onSuccess` 回调驱动：AuthPage 调 `api.signin` 成功 → App 置 `isAuthenticated=true` → 触发首次 `fetchFiles/fetchUserInfo`。
+
+## ApiService
+
+`ApiService` 是所有 HTTP 的统一入口。核心是私有方法 `request()`：它从 `localStorage('oss_token')` 取 token 注入 `Authorization` 头，给每个请求生成 `X-Request-Id`（用于全链路日志关联，网关和 Go 服务都透传它），并按 HTTP 状态码把错误归一成 `ApiError`。
+
+代码证据：`forward_part/static/services/api.ts`（request 统一封装，L64-113 节选）
+
+```ts
+private async request(endpoint: string, options: RequestInit = {}) {
+  const token = this.getToken();
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+token 的生命周期被严格管理：`signin` 成功后写入 `oss_token`；`logout` 先把 token 加入服务端黑名单，再清 token 和所有 multipart 会话（localStorage + sessionStorage 两个存储都扫一遍 `multipart_upload_sessions` 前缀的 key）。
+
+代码证据：`forward_part/static/services/api.ts`（signin 与 logout，L119-148）
+
+```ts
+async signin(data: any) {
+  const res = await this.request('/user/signin', { method: 'POST', body: JSON.stringify(data) });
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+文件 API 家族一一对应网关路由（`/file/query|download|showfile|delete|upload|initupload|PresignParts|uploadpart|CompleteMultipart|AbortMultipart|Status`）。`simpleUpload` 直接把文件 Blob 作为 body 上传，元信息走自定义头；`uploadPresignedPart` 则按 URL 是回环地址还是 MinIO 地址走两条路径。
+
+代码证据：`forward_part/static/services/api.ts`（simpleUpload 与 uploadPresignedPart，L187-198、L214-253 节选）
+
+```ts
+async simpleUpload(file: Blob, filename: string, fileHash: string, contentType?: string): Promise<UploadResponse> {
+  return this.request('/file/upload', {
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：
+
+- `request()` 是所有 API 的唯一 fetch 出口：token 注入、request-id、Content-Type 兜底、JSON 解析、错误归一全在这里，业务方法只写 `endpoint + body`。
+- `X-Request-Id` 用 `crypto.randomUUID()` 生成，贯穿 网关 → file_srv → Kafka 消息头 → store_srv 日志（`extractKafkaRequestID`），是全链路排障的主键。
+- `simpleUpload` 复用普通 JSON 请求通道但 body 是原始文件（多部分语义被自定义头取代），网关侧 `LoadFile` 从 headers 取文件名/hash/size。
+- `uploadPresignedPart` 的双路径：URL 指向 `127.0.0.1`/`localhost`（MinIO NodePort 暴露在回环地址时浏览器拿不到）就走 `/file/uploadpart` 让网关代理 PUT（URL 放在 `X-Presigned-Part-Url` 头）；否则浏览器直连 MinIO 预签名 URL 并回读 ETag。
+- 服务端返回的 `code` 不是 HTTP 状态时（例如下载 URL 放在 `Resp.code=0` 的 message 里），由上层按业务字段判断，`request()` 只负责传输层。
+
+## AuthPage
+
+`AuthPage` 用 `AuthMode = 'signin' | 'signup' | 'verify'` 一个状态变量驱动登录、注册、邮箱验证码三个界面。提交处理 `handleSubmit` 按 mode 分流：signin 直接调 `api.signin`；signup 注册后立即 `api.sendCode` 并切到 verify 模式；verify 校验验证码后回到 signin。
+
+代码证据：`forward_part/static/components/AuthPage.tsx`（handleSubmit，L22-48）
+
+```tsx
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+验证码可以手动重发（`handleSendCode`），verify 模式下邮箱输入框被禁用，只允许改验证码。
+
+代码证据：`forward_part/static/components/AuthPage.tsx`（handleSendCode，L50-60）
+
+```tsx
+const handleSendCode = async () => {
+  if (!formData.email) return setError('Identifier required');
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+解释：
+
+- 三个 mode 是同一个表单组件，通过条件渲染显示不同字段（username/password 只出现在 signin/signup，email/code 出现在 signup/verify），避免了三个页面组件。
+- 注册成功不等于登录成功：signup 后必须完成 verify 才能回到 signin 登录；`onSuccess` 只在 signin 成功后触发，所以 App 的认证态切换发生在登录而非注册。
+- 错误统一显示在表单顶部的 `[SYSTEM_ERROR]` 面板（err.message 即 `ApiError` 携带的信息）。
+
+## UploadManager
+
+`UploadManager` 同时处理小文件和大文件：先对文件内容算 SHA-256（`crypto.subtle.digest`），按 5MB 阈值分流——小文件走 `api.simpleUpload`，大文件走 multipart 全流程。每个文件对应一个 `UploadTask`，UI 用任务状态 + 进度条实时渲染。
+
+代码证据：`forward_part/static/components/UploadManager.tsx`（hash 计算与阈值分流，L26-30、L220-249 节选）
+
+```ts
+const calculateHash = async (data: ArrayBuffer): Promise<string> => {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+```tsx
+const processUpload = async (file: File, taskId: string) => {
+  try {
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+multipart 的断点恢复依赖浏览器 session：`{upload_id, part_size, total_parts}` 按 `multipart_upload_sessions:<token前16位>` 为 key 存进 sessionStorage（旧版本 localStorage 数据读取时自动迁移）。恢复时先查本地 session，再向服务端 `getMultipartStatus` 核对已上传 part，缺哪个补传哪个——以服务端为准，本地 session 只是入口。
+
+代码证据：`forward_part/static/components/UploadManager.tsx`（session 存取，L19-64 节选）
+
+```ts
+const multipartSessionStorageKey = () => {
+  const token = localStorage.getItem('oss_token') || 'anonymous';
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+`uploadMultipart` 主流程：取/建 session → 查服务端状态 → 算缺失 part → 按 `PART_PARALLELISM=2` 分批 `presignParts` + 并发 `uploadPresignedPart`（实时更新进度）→ `completeMultipart` → 清理 session。
+
+代码证据：`forward_part/static/components/UploadManager.tsx`（uploadMultipart，L162-218 节选）
+
+```ts
+const uploadMultipart = async (file: File, fileHash: string, taskId: string) => {
+  let session = getMultipartSession(fileHash);
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+上传完成后任务可能停留在 `pending_scan`（病毒扫描未结束）。`UploadManager` 对这类任务启动 3 秒轮询 `api.queryFiles()`，用 `filehash → status` 映射刷新任务状态，扫描结束自动从 amber 变绿/变红。
+
+代码证据：`forward_part/static/components/UploadManager.tsx`（pending_scan 轮询，L282-306）
+
+```tsx
+useEffect(() => {
+  const pendingTasks = tasks.filter((t) => t.status === 'pending_scan' && t.fileHash);
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}, [tasks]);
+```
+
+解释：
+
+- hash 计算是同步阻塞的（`await file.arrayBuffer()` 把整个文件读进内存），所以先置 `status='uploading', detail='hashing'` 提示用户；这也是大文件 hash 成本的体现——但它是服务端去重的必要条件。
+- 断点恢复的关键不在本地 session，而在服务端：`getMultipartStatus` 返回 `uploaded_parts`，本地 session 过期或丢失时（Init 返回 `status != 'init'`，见 `buildMultipartSession`）重新 Init 即可，已传 part 不会重复传。
+- `PART_PARALLELISM=2` 控制并发；`uploadPresignedPart` 的 ETag 返回值在此流程中不强制收集——complete 时服务端会自己 `ListObjectParts` 取 ETag。
+- 上传失败时 `uploadResponseFromError` 从 `ApiError.body` 里还原 `status/object_key/file_hash`——例如服务端命中已感染文件时返回的 `blocked by virus scan` 会直接反映到任务状态。
+- `toTaskStatus` 把服务端状态原样映射为任务状态，因此任务面板能看到 `success/pending_scan/infected/scan_failed` 全谱系。
+
+## App.tsx
+
+`App.tsx` 承担文件列表、预览、下载、删除、文本编辑回写和状态展示。`fetchFiles` 拉取列表并在 `isAuthenticated` 变化时触发；列表里有 `pending_scan` 文件时启动与 UploadManager 相同的 3 秒轮询——扫描结果不靠推送，靠轮询收敛。
+
+代码证据：`forward_part/static/App.tsx`（fetchFiles 与列表轮询，L161-172、L194-200）
+
+```tsx
+const fetchFiles = async () => {
+  if (!isAuthenticated) return;
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+```tsx
+useEffect(() => {
+  const pendingFiles = files.filter((f) => f.status === 'pending_scan');
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}, [files]);
+```
+
+可下载/可预览的门禁是 `isFileAvailable`：只有 `status === 'success'` 的文件按钮才可用。预览分两类：文本类（扩展名/Content-Type 判定）先 `getPreviewUrl` 拿预签名 URL，再用 fetch 拉全文进编辑器；非文本类直接 `openExternalUrl` 新窗口打开。
+
+代码证据：`forward_part/static/App.tsx`（isFileAvailable 与 handlePreview，L211-237、L335）
+
+```tsx
+const handlePreview = async (file: FileItem) => {
+  setLoading(true);
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+```tsx
+const isFileAvailable = (file: FileItem) => file.status === 'success';
+```
+
+预览/下载拿到的 MinIO URL 可能指向 `127.0.0.1:30900`（本机 MinIO NodePort），浏览器直接访问会绕过代理导致失败，所以 `rewriteMinioUrl` 把它改写为 `localhost:3000`（前端同源）让 OpenResty 代理中转。
+
+代码证据：`forward_part/static/App.tsx`（rewriteMinioUrl 与 triggerBrowserDownload，L63-74、L84-92）
+
+```tsx
+const rewriteMinioUrl = (url: string) => {
+  try {
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+编辑-回写闭环：在线编辑的文本保存时重新算 SHA-256、包成 Blob，走与上传相同的小文件通道 `simpleUpload`——修改一个文件等于上传一个新 hash 的文件，服务端按 hash 去重/复用。
+
+代码证据：`forward_part/static/App.tsx`（handleSaveEdit，L273-288）
+
+```tsx
+const handleSaveEdit = async () => {
+  if (!editingFile) return;
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+文件状态在列表里分色展示：`success` 绿、`pending_scan` 琥珀、`infected/scan_failed` 红，并显示 `scan_detail` 病毒签名——扫描状态对用户完全可见。
+
+代码证据：`forward_part/static/App.tsx`（formatFileStatus，L337-350）
+
+```tsx
+const formatFileStatus = (file: FileItem) => {
+  switch (file.status) {
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+};
+```
+
+解释：
+
+- 文件列表与上传任务是两套独立状态：列表（`files`）来自 `queryFiles`，任务（`tasks`）来自 UploadManager 内部；`onComplete={fetchFiles}` 在每次上传收敛后刷新列表。
+- `isFileAvailable` 把"扫描通过"固化为前端门禁，与后端 Filedowm/Showfile 的 409 拒绝（见 14 章）形成双保险。
+- `rewriteMinioUrl` 是本地开发环境的桥接：预签名 URL 里的 `127.0.0.1:30900` 换成 `localhost:3000` 后由 OpenResty 反代到网关 → MinIO，规避浏览器对回环地址混合内容的限制。
+- 文本预览用 `cache: 'no-store'` 每次拉最新内容；Markdown 预览由 `renderMarkdown` 的正则替换实现（L310-320），不是引入第三方 markdown 库。
+- `sha256Hex`（L101-107）与 UploadManager 的 `calculateHash` 是同一算法的两个副本，都基于 `crypto.subtle.digest('SHA-256')`。
+
+## types.ts
+
+`types.ts` 是前后端接口语义的对齐点：后端 proto/JSON 字段在这里定型，组件只依赖这些类型。`FileItem` 对应文件列表行；`QueryResponse` 对应 `/file/query` 响应；multipart 三件套（`MultipartInitResponse`/`PresignPartsResponse`/`UploadStatusResponse`/`CompleteMultipartResponse`）对应各自接口。
+
+代码证据：`forward_part/static/types.ts`（契约类型，L13-27、L34-52）
+
+```ts
+export interface FileItem {
+  filename: string;
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+任务侧类型同样集中定义：`UploadTask` 是上传任务面板的渲染模型（进度、状态、错误信息）；`AuthMode` 驱动 AuthPage 三模式；`ApiErrorBody` 描述网关/服务端错误 JSON 的可能形状。
+
+代码证据：`forward_part/static/types.ts`（任务与错误类型，L67-87）
+
+```ts
+export type AuthMode = 'signin' | 'signup' | 'verify';
+
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：
+
+- `FileItem.filesize` 是必填数字（与后端 `Size` 对应），`status/scan_detail` 可选——扫描前的文件没有这些字段，`isFileAvailable` 对 undefined 直接判不可用。
+- `UploadStatusResponse` 用 `uploaded_parts: number[]` 表达断点恢复依据，与 14 章 `Status` RPC 的 `UploadedParts` 一一对应。
+- `ApiErrorBody` 是弱契约：`request()` 解析错误时同时尝试 `message/details`，容忍网关错误形状与 Go 服务错误形状的差异。
+- `status` 字段在多个响应类型里是字符串（`'init'/'pending_scan'/'success'/'infected'/'scan_failed'`），前端用 `toTaskStatus`/`formatFileStatus` 原样映射，不自行发明状态名。
+
+## 状态转换
+
+前端有两类状态：认证状态和文件/上传任务状态。
+
+```text
+未登录 -> signin 成功 -> localStorage 保存 token -> isAuthenticated=true
+已登录 -> logout -> revoke/logout API + 清 token + 清 multipart session -> isAuthenticated=false
+```
+
+上传任务状态：
+
+```text
+queued -> hashing -> uploading -> pending_scan -> success/infected/scan_failed
+queued/hashing/uploading -> 异常 -> error
+multipart initialized -> partial uploaded -> resumed by status -> completed -> pending_scan
+```
+
+文件列表状态：
+
+```text
+pending_scan -> 轮询 queryFiles -> success -> 按钮开放
+pending_scan -> 轮询 queryFiles -> infected/scan_failed -> 展示阻断/失败原因
+```
+
+## 关键数据结构 / 字段
+
+- `FileItem`：文件列表行，驱动下载/预览按钮、状态标签和 scan_detail 展示。
+- `UploadTask`：上传任务面板状态，记录 progress/status/error/detail。
+- `MultipartSession`：本地恢复入口，保存 upload_id、part_size、total_parts。
+- `MultipartInitResponse`：服务端分片会话初始化结果。
+- `ApiErrorBody`：兼容 Gateway/Go 服务不同错误 JSON 形态。
+- `oss_token`：JWT 本地存储 key，是前端身份态的核心。
+
+## 常见误判与排障顺序
+
+- 误判：前端只展示后端结果。正确理解：前端负责任务状态机、断点恢复、轮询收敛和 URL rewrite。
+- 误判：localStorage multipart session 是可信进度。正确理解：它只保存 upload_id，已传分片以服务端 status 为准。
+- 误判：pending_scan 是失败。正确理解：它是异步扫描中的正常状态。
+- 排障顺序：token 是否存在 -> request headers 是否正确 -> API 返回 body -> UploadTask 状态 -> queryFiles 轮询 -> URL rewrite/浏览器访问。
+
+## 阅读检查
+
+- 能从 UI 点击上传追到具体 API 方法（文件选择 → `handleFileUpload` → `processUpload` → `simpleUpload`/`uploadMultipart` → 对应 `api.*` 方法）。
+- 能说明 token 在前端何时保存（signin 成功）、何时携带（`request()` 注入 `Authorization`）、何时清除（logout：先黑名单后清 token 和 multipart session）。
+- 能解释 `X-Request-Id` 的生成位置与跨层透传路径（前端 → 网关 → file_srv → Kafka → store_srv）。
+- 能解释 pending_scan 在 UI 上为什么需要轮询更新（异步扫描无推送通道），以及列表和任务面板两套轮询分别在哪触发。
+- 能说明断点恢复为什么"本地 session 只是入口，服务端 status 才是真相"。
+- 能指出 `isFileAvailable` 与后端 `Filedowm/Showfile` 409 拒绝如何构成双保险。
+- 能解释 `rewriteMinioUrl` 解决什么问题（本机 MinIO 回环地址经 OpenResty 中转）。
+- 能说出 `types.ts` 里哪些类型对应后端哪些 RPC 响应（FileItem/QueryResponse、MultipartInitResponse、PresignPartsResponse、UploadStatusResponse、CompleteMultipartResponse）。

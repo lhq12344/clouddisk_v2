@@ -1,0 +1,238 @@
+# 18. 坑点与阅读检查清单
+
+## 本章定位
+
+本章的每条"容易误判的点"都附了真实源码证据：这些边界不是架构理想化描述，而是当前实现中真实存在的代码事实。
+
+## 总链路
+
+本章用于最终复盘，建议按四条链路回看前面章节：
+
+```text
+登录链路：AuthPage -> ApiService.signin -> OpenResty -> Drogon jwt_decode -> account_srv -> JWT/localStorage
+小文件链路：UploadManager -> simpleUpload -> OpenResty -> Drogon UploadFileProxy -> file_srv UploadFile -> MinIO -> Outbox -> store scan
+分片链路：InitMultipart -> Redis meta -> PresignParts -> PUT part -> Status/ListParts -> Complete -> pending_scan -> scan result
+扫描链路：Outbox -> Kafka -> Inbox -> MinIO stream -> ClamAV -> success/infected/scan_failed/DLQ
+```
+
+读这一章时不要只记结论，要能把每个坑点映射回对应源码位置和排障入口。
+
+## 常见误判与排障顺序
+
+1. OpenResty 当前不是动态发现 gateway。虽然有 Lua 文件，但 active upstream 固定到 `127.0.0.1:38080`。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+# ============ 动态 upstream ============
+upstream cloudisk_backend {
+# ... 省略非关键行，完整证据见上文路径/配置锚点 ...
+}
+```
+
+解释：`lua_shared_dict consul_services 10m` 和 Lua 文件都在，但注释明确说明当前固定转发；`lua-resty-http` 在镜像内缺失是固定写法的原因之一。
+
+2. Drogon Gateway 是应用网关，不是纯转发代理；JWT filter、controller、gRPC stub 都在这里。
+
+代码证据：`forward_part/gateway/controllers/AIController.cc`
+
+```cpp
+// 2) JWT 解析得到用户身份（你已有）
+std::string username;
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：controller 从 request attributes 取身份、做业务强校验、构造 gRPC stub 调用——这些都在网关进程内完成，不是透明转发。
+
+3. JWT 主校验在 Drogon `jwt_decode`，不是每个 Go service 都重复解析 HTTP token。
+
+代码证据：`forward_part/gateway/filters/jwt_decode.cc`
+
+```cpp
+std::string token = auth.substr(7);
+std::string signingKey = MyAppData::instance().SigningKey;
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+	std::string name = decoded.get_payload_claim("Name").as_string();
+```
+
+解释：HS256 签名校验、issuer 校验、Redis 黑白名单都发生在网关 filter；Go 侧 file/account 服务拿到的是 gateway 透传的 `x-user-id` metadata（如 file.go 的 `incomingUserID`），不再解析 HTTP token。
+
+4. `File.Sha1` 是历史字段名；当前业务语义应按内容 hash 理解，注意不要误判算法。
+
+代码证据：`backword_part/model/filedb.go`
+
+```go
+type File struct {
+	gorm.Model
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+```go
+type DownloadCmdPayload struct {
+	...
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：列名、JSON 字段名、测试工具注释里也保留 `sha1`/`SHA1` 字样，但实际计算的是 SHA-256（见 `test/mputest.go` 的 `calculateFileSHA256`）。做 dedup/对比时按"内容哈希"理解，不要按 SHA-1 算法理解。
+
+5. 上传成功不等于可下载；新文件通常先是 `pending_scan`。
+
+代码证据：`backword_part/model/filedb.go` + `backword_part/file_server/file_srv/protobuf/file.go`
+
+```go
+const (
+	FilePendingScan = "pending_scan"
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+)
+```
+
+```go
+if errors.Is(err, gorm.ErrRecordNotFound) {
+	file = model.File{
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+	...
+```
+
+解释：上传/落库后文件状态默认 `pending_scan`，只有 store_srv 扫描通过才变 `success`；下载/预览接口对非 success 状态会拒绝（file.go 的下载链路检查 `uf.File.Status == model.FilePendingScan` 等分支）。
+
+6. `UploadPart(stream)` 在 proto 里存在，但 Go 实现（file.go:1089-1091）直接返回 `codes.Unimplemented`（"deprecated, use PresignParts + direct multipart upload"）；实际主链路是 `PresignParts + 预签名直传`，localhost 下 `/file/uploadpart` 由 gateway 用 `X-Presigned-Part-Url` header 代理预签名 PUT。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`
+
+```go
+func (s FileServer) UploadPart(stream FileService_UploadPartServer) error {
+	return status.Error(codes.Unimplemented, "deprecated, use PresignParts + direct multipart upload")
+}
+```
+
+解释：proto 里保留这个 RPC 是为了兼容旧客户端；真实主链路是 `InitMultipart → PresignParts → 预签名 PUT → CompleteMultipart`（`test/mputest.go` 和前端 UploadManager 都走这条）。`/file/uploadpart` 路由仍然存在，但 gateway 侧是把它当 HTTP 代理用（读 `X-Presigned-Part-Url` header 转发 PUT 到对象存储）。
+
+7. Outbox 发 Kafka 后 `markSent` 失败无法回滚 Kafka，所以 consumer 必须靠 Inbox 幂等。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go`
+
+```go
+// 成功：标 SENT
+if err := d.markSent(ctx, ob.ID); err != nil {
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：`markSent` 更新失败时消息已经进了 Kafka，重试会把同一事件再发一遍；store_srv 侧用 Inbox（event_id 幂等键）保证重复消息只处理一次。这是 producer/consumer 两侧一致性边界的关键。
+
+8. `File` 和 `UserFile` 不同：前者是内容对象，后者是用户命名和归属关系。
+
+代码证据：`backword_part/model/filedb.go`
+
+```go
+type File struct {
+	gorm.Model
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+解释：`File` 按内容哈希唯一（同内容去重后只有一个对象），`UserFile` 是 (account_id, file_id, name) 唯一——同一个内容文件可以被多个用户以不同名字引用；删除、改名等操作作用在 UserFile 上，扫描状态作用在 File 上。
+
+9. Store service 才决定文件最终 `success/infected/scan_failed`。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go`
+
+```go
+func (c *FileUploadConsumer) finalizeClean(ctx context.Context, payload *model.FileEventPayload) error {
+	now := time.Now()
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+}
+```
+
+```go
+func (c *FileUploadConsumer) markFileScanFailed(ctx context.Context, payload *model.FileEventPayload, reason string) error {
+	now := time.Now()
+// ... 省略非关键行，完整证据见上文路径/函数锚点 ...
+			...
+```
+
+解释：`success`（finalizeClean）、`infected`（finalizeInfected，还会删对象）、`scan_failed`（markFileScanFailed）这三个终态全部由 store_srv 的消费端写库，file_srv 只写 `pending_scan`。所以"上传成功"和"文件可用"是两件事。
+
+10. C++ 组件构建依赖通常比 Go/前端更容易卡环境。
+
+代码证据：`forward_part/gateway/CMakeLists.txt`
+
+```cmake
+# Nacos SDK C++ typically installs headers to /usr/local/include/nacos and lib to /usr/local/lib
+find_library(NACOSCPP_LIB nacos-cli PATHS /usr/local/lib /usr/lib)
+# ... 省略非关键行，完整证据见上文路径/配置锚点 ...
+endif()
+```
+
+解释：依赖通过 `find_package`/`find_path`/`find_library` 按系统路径探测，装的位置不对就找不到；`nacos-cli` 缺失只是 warning（可能链接期才炸），librdkafka 缺失直接 `FATAL_ERROR`。email_srv 的 CMakeLists 里 hiredis/rdkafka 同样硬性 `FATAL_ERROR`。对比之下 Go 依赖由 `go mod` 全自动拉取，前端由 npm 拉取，很少卡环境。
+
+11. nginx `:2025` 的 `/preview/` alias 硬编码了 WSL 路径 `/home/lihaoqian/project/clouddisk_v2/storage/`，本地 Windows 环境预览会 404，需改路径或经后端预签名 URL。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+server {
+	listen 2025;
+# ... 省略非关键行，完整证据见上文路径/配置锚点 ...
+}
+```
+
+解释：`/preview/` 和 `/download/` 两个 location 的 alias 都指向 WSL 侧路径。Windows 本机直接跑 nginx 时该路径不存在，预览/下载静态目录会 404；`start_all.sh` 启动 nginx 前会用 sed 把旧的 `/home/lihaoqian/myproject/clouddisk_v2` 前缀替换成 `$PROJECT_ROOT`，但 Windows 上仍要改到真实存储目录或改用 MinIO 预签名 URL。
+
+## 关键数据结构 / 字段复盘
+
+- `Authorization / oss_token`：前端和 Gateway 鉴权链路的主凭证。
+- `x-request-id`：跨 OpenResty、Gateway、gRPC、Kafka、store service 的排障主线。
+- `File.sha1 / object_key / status / scan_detail`：文件内容身份、对象位置、安全状态和扫描详情。
+- `UserFile.filename / file_hash / account_id`：用户视角文件关系，不能和 `File` 混淆。
+- `upload_id / oss_upload_id / uploaded_parts`：分片上传断点恢复的关键字段。
+- `Outbox.event_id / Inbox.event_id / DLQFailure.event_id`：异步一致性和幂等恢复的关键键。
+- `MCPAPIKey.key_hash / key_prefix / status`：MCP 工具调用鉴权与审计字段。
+
+## 状态转换复盘
+
+这些状态转换是整套文档的最终复习主线：
+
+```text
+鉴权：未登录 -> signin 成功 -> JWT/localStorage -> Gateway request attributes -> logout/过期/黑名单
+注册：signup pending(Redis) -> verify code -> Account(MySQL) created -> signin
+... 省略非关键行，完整证据见上文路径/锚点 ...
+MCP：active key -> valid context；expired/revoked/rate limited -> request denied
+```
+
+如果读完文档后不能把一个线上问题落到这些状态中的某一步，说明还没有真正读懂链路。
+
+## 每章自测问题
+
+- 01：能否画出同步链路和异步链路两张图？
+- 02：能否指出 CORS、Request ID、upload buffering 分别在哪？
+- 03：能否从 `ADD_METHOD_TO` 推出 HTTP API 表？
+- 04：能否从登录追踪 token 到 request attributes？
+- 05：能否解释 proto、generated stub、server register、Consul 的关系？
+- 06：能否讲清配置从 Nacos 到 ViperConf 的流转和热更新机制？
+- 07：能否说明注册为什么要 Redis pending + verify？
+- 08：能否解释 `File/UserFile/Outbox/Inbox/DLQFailure` 每个结构体的业务意义？
+- 09：能否从 `simpleUpload` 追到 `UploadFile` 和 MinIO object key？
+- 10：能否说明为什么只有 `success` 才能预览/下载？
+- 11：能否说清 `Status` 为什么是断点续传关键？
+- 12：能否解释 producer/consumer 两侧一致性边界？
+- 13：能否说清 clean/infected/scan_failed 的落库路径？
+- 14：能否区分 MinIO 主链路和 AliOSS 备用/扩展边界？
+- 15：能否定位 token、上传任务、preview fetch 在前端的位置？
+- 16：能否只基于源码说明 AI/MCP wiring，不臆测外部模型？
+- 17：能否列出本地启动最小依赖和排障顺序？
+
+## 推荐复盘动作
+
+读完后手动画三条链：
+
+```text
+登录：AuthPage -> ApiService.signin -> OpenResty -> AccountController -> account_srv.Signin -> JWT -> localStorage
+小文件：UploadManager -> ApiService.simpleUpload -> OpenResty -> FileController.LoadFile -> file_srv.UploadFile -> MinIO -> Outbox -> store_srv -> File.status
+分片：UploadManager -> initMultipart -> presignParts -> upload parts -> Status -> CompleteMultipart -> Outbox -> store_srv
+```
+
+对照本章 11 条坑点检查这三条链上是否踩了"误判"：小文件链上文件状态默认 `pending_scan`（坑点 5）、最终状态由 store_srv 写（坑点 9）；分片链上 `UploadPart(stream)` 是废弃实现，实际走预签名直传（坑点 6）；登录链上 token 解析发生在网关 `jwt_decode`（坑点 3）。

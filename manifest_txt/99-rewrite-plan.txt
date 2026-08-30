@@ -1,0 +1,437 @@
+# 99. Manifest 分章修复方案
+
+## 修复目标
+
+当前 manifest 的修复目标不是继续“补代码块”，而是把每篇文章恢复成可学习、可复盘、可按源码验证的系统讲解文档。
+
+总体要求：
+
+- `03-cpp-gateway-drogon` 作为详细度标杆，但不是代码密度标杆。
+- 每章必须同时覆盖链路讲解、模块职责、状态变化、数据结构字段、源码证据、证据解释和排障视角。
+- 代码证据占比控制在 20% 到 30%；流程、机制、状态解释占主体。
+- `manifest/*.md` 是源文档；完成后必须同步到 `manifest_txt/*.txt`。
+- 不再采用“章节末尾补一小块代码证据”的结构。
+
+建议内容比例：
+
+```text
+60% 链路 / 机制 / 状态解释
+25% 源码证据
+15% 排障 / 阅读检查
+```
+
+## 通用章节模板
+
+每章根据自身主题取舍，但默认按以下结构重整：
+
+```text
+# 章节标题
+
+## 本章定位
+说明这一章在整个网盘系统里解决什么问题，不解决什么问题。
+
+## 总链路
+用一条或多条链路描述数据、请求、事件如何流动。
+
+## 关键组件职责
+说明本章涉及的中间件、服务、模块各自做什么。
+
+## 流程拆解
+按步骤讲清楚请求、数据或事件如何推进。
+
+## 状态转换
+如果涉及用户、文件、上传任务、扫描、事件状态，必须单独讲。
+
+## 关键数据结构 / 字段
+只讲和本章相关的字段，并解释字段为什么存在。
+
+## 源码证据与解释
+每个关键结论配短代码证据；代码后必须解释“这段代码证明什么”。
+
+## 常见误判与排障顺序
+说明容易误解什么，出问题应该从哪里查。
+
+## 阅读检查
+读完后应该能回答的问题。
+```
+
+## 源码证据规则
+
+每章代码证据必须满足：
+
+```text
+1. 每段代码前先讲结论。
+2. 每段代码后解释“证明了什么”。
+3. 单段代码尽量不超过 15 行。
+4. 不连续堆多个代码块。
+5. 每章保留 3 到 6 个关键证据即可。
+6. 代码证据必须服务于链路、状态或职责解释。
+```
+
+错误写法：
+
+```text
+源码：
+[大段代码]
+源码：
+[大段代码]
+源码：
+[大段代码]
+```
+
+正确写法：
+
+```text
+结论：断点续传的事实状态来自 MinIO，而不是 localStorage。
+
+证据：
+[Status/list parts 代码]
+
+解释：这段代码说明服务端会重新查询 MinIO 已上传 parts，所以刷新页面后仍能恢复真实进度。
+```
+
+## 状态转换要求
+
+以下章节必须有状态转换小节：
+
+```text
+04 鉴权状态
+07 注册 / 登录状态
+08 文件领域状态
+09 小文件上传状态
+10 文件可读状态
+11 分片上传状态
+12 Outbox / Inbox / DLQ 状态
+13 扫描状态
+15 前端上传任务状态
+16 MCP API key 状态
+```
+
+状态转换建议统一写成：
+
+```text
+状态 A -> 触发条件 -> 状态 B -> 下游影响
+```
+
+示例：
+
+```text
+pending_scan -> store service 扫描 clean -> success -> 下载 / 预览接口允许签 URL
+pending_scan -> ClamAV infected -> infected -> 删除 object，前端禁用下载
+pending_scan -> 扫描失败超过重试 -> scan_failed / DLQ -> 需要排障或恢复
+```
+
+## 分章修复方案
+
+### 00-index
+
+目标：目录要变成学习路线，而不是普通文件列表。
+
+修复动作：
+
+- 补“推荐阅读顺序”。
+- 补“每章依赖关系”。
+- 补“读完应掌握什么”。
+- 把 01 到 18 分成架构层、入口层、服务层、文件能力层、异步层、扩展层、调试层。
+
+验收标准：读者只看 00 就知道应该先读哪几章、每章解决什么问题、哪些章节可以并行阅读。
+
+### 01-architecture-panorama
+
+目标：恢复全局架构视角。
+
+修复动作：
+
+- 分成同步请求链路、异步扫描链路、配置 / 发现链路、对象存储链路、前端交互链路。
+- 说明 Client、OpenResty、Drogon Gateway、Go gRPC services、MySQL、Redis、Kafka、MinIO、ClamAV、Consul、Nacos 的职责边界。
+- 代码证据只证明模块真实存在和连接方式，不展开实现细节。
+
+验收标准：读者能画出至少两张图：同步 HTTP/gRPC 请求链路、异步上传扫描链路。
+
+### 02-request-entry-openresty
+
+目标：讲清 OpenResty 入口层职责。
+
+修复动作：
+
+- 说明 OpenResty 做端口监听、CORS、request id、反向代理、上传 body 代理、preview 端口。
+- 明确 OpenResty 不做 JWT 业务鉴权、不调用 gRPC、不写 MinIO、不落 MySQL。
+- 讲 `:2024` 主入口和 `:2025` preview 入口的差异。
+
+验收标准：读者能说明一个请求进 OpenResty 后什么时候还在入口代理层，什么时候已经进入 Drogon 应用网关层。
+
+### 03-cpp-gateway-drogon
+
+目标：保留为详细度样板章，并补齐缓存、stub 和转发原理。
+
+修复动作：
+
+- 强化 Drogon Gateway 职责：HTTP 路由、JWT filter、请求参数解析、gRPC stub 获取、异步 RPC、HTTP 响应封装、上传代理、分片代理。
+- 补 `KArcCache` / ARC 缓存原理：缓存什么、为什么缓存 gRPC channel/stub、如何失效、如何 fallback。
+- 补 stub 概念：stub 是 gRPC 客户端代理对象，Gateway 通过 stub 调远端 service。
+- 解释请求如何从 controller 转成 gRPC 调用，而不是只贴 `stub->async()`。
+
+验收标准：读者能解释 Gateway 为什么不是透明代理，以及 HTTP 请求如何变成 gRPC 请求。
+
+### 04-authentication-jwt-identity
+
+目标：从代码片段改成完整身份链路。
+
+修复动作：
+
+- 按 `Signin -> localStorage -> Authorization header -> OpenResty 透传 -> Drogon jwt_decode -> request attributes -> controller/gRPC` 写。
+- 单独讲 Redis whitelist / blacklist 的作用。
+- 状态转换覆盖：未登录、已登录、token 过期、token 黑名单、token 白名单不匹配。
+- 代码证据覆盖每一步，而不是只贴 `Signin` 或 `jwt_decode`。
+
+验收标准：读者能从登录响应一路追到 controller 如何拿到 user id/name。
+
+### 05-grpc-contract-and-service-discovery
+
+目标：区分 gRPC 合同和 Consul 服务发现。
+
+修复动作：
+
+- 讲 proto 定义 RPC 能力和消息字段。
+- 讲 generated stub / server interface 如何让 C++/Go 能调用。
+- 讲服务启动时如何注册 gRPC server。
+- 讲 Consul 只提供地址和健康状态，不定义 RPC 方法。
+- 单独解释 channel、stub、metadata、interceptor、health check 的关系。
+
+验收标准：读者能说明“知道服务地址”和“知道怎么调用 RPC”是两件事。
+
+### 06-config-center-and-shared-infra
+
+目标：讲配置如何影响所有服务。
+
+修复动作：
+
+- 按 `Nacos -> ViperConf -> global clients -> service startup` 写。
+- 说明 MySQL、Redis、Consul、Kafka、MinIO、AliOSS 如何依赖配置初始化。
+- 强调热更新能更新配置结构，但不一定自动重建已有连接。
+
+验收标准：读者能判断某个基础设施连接失败应查 Nacos 配置、ViperConf 还是 client 初始化。
+
+### 07-account-service
+
+目标：改成账号状态机讲解。
+
+修复动作：
+
+- 按 `signup pending -> verify code -> account created -> signin -> JWT -> userinfo` 写。
+- 讲 Redis pending 注册信息为什么存在。
+- 讲验证码验证后为什么才落 Account 表。
+- 讲 Account 字段、密码校验、JWT 返回方式。
+
+验收标准：读者能说明注册、验证、登录分别改变了 Redis / MySQL / JWT 哪些状态。
+
+### 08-file-domain-model
+
+目标：讲领域模型，不只贴 struct。
+
+修复动作：
+
+- 重点解释 `File` 是内容对象，`UserFile` 是用户视角文件。
+- 说明同一个 hash 可以对应多个用户文件名。
+- 讲 `Outbox / Inbox / DLQFailure` 是异步一致性结构。
+- 字段解释围绕 `sha1/filehash`、`object_key`、`status`、`scan_detail`、`event_id`。
+
+验收标准：读者能解释为什么不能只用一张 file 表解决所有问题。
+
+### 09-small-file-upload
+
+目标：从代码主导恢复为流程主导。
+
+修复动作：
+
+- 按数据流写：`Blob -> OpenResty -> Drogon body -> gRPC meta/data -> Go UploadFile -> io.Pipe -> MinIO -> DB -> Outbox`。
+- 单独补状态转换：`uploading -> object stored -> pending_scan -> success/infected/scan_failed`。
+- 说明每层中间件作用：OpenResty 代理，Drogon 协议转换，gRPC stream 传输，MinIO 存对象，MySQL 存元数据，Kafka 触发扫描。
+- 删除连续堆代码的结构，每个关键证据后补解释。
+
+验收标准：读者能不看源码先复述小文件上传全过程，再根据文中证据定位源码。
+
+### 10-download-preview-reading
+
+目标：讲下载、预览、阅读机制，而不是只讲 presigned URL 代码。
+
+修复动作：
+
+- 按 `文件列表状态 -> 前端 success UX 门禁 -> 后端 owner/status 强校验 -> presigned GET -> browser open/fetch` 写。
+- 解释为什么后端返回 presigned URL，而不是直接返回文件。
+- 强调下载和预览区别是 `Content-Disposition: attachment / inline`。
+- 说明当前阅读功能主要是前端 fetch preview URL 读取文本，不夸大成完整文档解析服务。
+
+验收标准：读者能解释 pending_scan 文件为什么前端禁用且后端也不会签 URL。
+
+### 11-multipart-upload-resume
+
+目标：讲清断点续传的状态来源。
+
+修复动作：
+
+- 按 `InitMultipart -> Redis meta -> PresignParts -> PUT parts -> Status(list parts) -> Complete -> pending_scan` 写。
+- 说明 Redis 保存 session meta，MinIO 保存 upload id 和已上传 parts，localStorage 只保存前端恢复信息。
+- 明确 `UploadPart(stream)` 已废弃，当前主链路是 `PresignParts + PUT part`。
+- 状态转换覆盖：`initialized -> uploading -> partial -> completed -> pending_scan -> success/infected/scan_failed`。
+
+验收标准：读者能说明刷新页面后为什么还能恢复上传，以及为什么恢复依据不是 localStorage。
+
+### 12-outbox-kafka-inbox-dlq
+
+目标：用失败场景讲异步一致性。
+
+修复动作：
+
+- 先讲问题：DB commit 后 Kafka 发送失败怎么办；Kafka 成功但 markSent 失败怎么办。
+- 再讲 Outbox、Inbox、DLQ 分别解决哪一侧问题。
+- 补状态转换：Outbox `new/failed/sending/sent`，Inbox `processing/done/failed`，DLQ `pending/retried/resolved`。
+- 明确系统是至少一次投递 + consumer 幂等，不是 exactly once。
+
+验收标准：读者能解释为什么 Outbox 和 Inbox 必须成对出现。
+
+### 13-store-service-virus-scan
+
+目标：恢复“文件何时可用”的主线。
+
+修复动作：
+
+- 按 `pending_scan event -> inbox -> MinIO stream -> ClamAV -> clean/infected/failed` 写。
+- 突出状态转换：`pending_scan -> success`、`pending_scan -> infected`、`pending_scan -> scan_failed/DLQ`。
+- 说明 infected 为什么删除 object，scan_failed 为什么不能默认放行。
+- 代码只证明关键节点：event 校验、MinIO stream、ClamAV INSTREAM、状态落库。
+
+验收标准：读者能说明上传成功和文件可下载之间为什么隔着扫描服务。
+
+### 14-object-storage-minio-alioss
+
+目标：按使用场景讲对象存储。
+
+修复动作：
+
+- 分四个场景讲 MinIO：小文件 PutObject、下载/预览 PresignedGetObject、multipart init/list/complete、扫描读取 stream。
+- 说明 object key 为什么基于 hash，而不是文件名。
+- 讲 MySQL 和 MinIO 的边界：MySQL 存元数据/状态，MinIO 存字节。
+- 说明 AliOSS 当前是备用/扩展封装，不要误判为主链路。
+
+验收标准：读者能按场景说出 MinIO 在链路里的不同角色。
+
+### 15-frontend-api-and-state
+
+目标：讲前端状态编排层。
+
+修复动作：
+
+- 说明前端不是纯 UI，而是 token、request id、文件列表、上传任务、pending_scan 轮询、preview fetch 的状态编排层。
+- 按 token 保存/注入、文件列表状态、小文件上传、分片上传、预览文本读取、下载 URL 打开来讲。
+- 补 `FileItem`、`UploadTask`、`MultipartInitResponse` 字段解释。
+- 状态转换覆盖：`queued/uploading/pending_scan/success/error`。
+
+验收标准：读者能从一次 UI 操作追到对应 API 方法和状态更新点。
+
+### 16-ai-and-mcp-services
+
+目标：讲 AI 和 MCP 的接入边界，避免臆测。
+
+修复动作：
+
+- AI 按 `JWT 用户态 -> Drogon AIController -> gRPC AIrequest -> AI service` 写。
+- MCP 按 `API key -> middleware 校验/限流/注入 context -> tools` 写。
+- 明确 JWT 鉴权和 MCP API key 鉴权不同。
+- 讲 `MCPAPIKey` 字段：hash、prefix、status、expires、last_used、rate limit/log。
+- 不臆测模型效果，只讲源码能证明的 wiring。
+
+验收标准：读者能区分 AI 服务和 MCP 服务的入口、鉴权方式和边界。
+
+### 17-build-run-test-debug
+
+目标：从命令清单改成调试路线。
+
+修复动作：
+
+- Go 服务、C++ Gateway、前端、store service、email service 分别说明怎么构建。
+- 命令旁边解释“验证什么”。
+- 说明本地启动前置依赖：Nacos、Consul、Redis、MySQL、Kafka、MinIO、ClamAV。
+- 给出排障顺序：配置中心 -> 基础设施连接 -> 服务注册 -> Gateway 发现 -> gRPC 调用 -> 存储 / 扫描。
+
+验收标准：读者能按顺序定位“服务起不来、Gateway 找不到服务、上传后不可下载”等问题。
+
+### 18-pitfalls-and-reading-checklist
+
+目标：做成复盘和排障清单，而不是杂项列表。
+
+修复动作：
+
+- 每个坑点使用四段：误判、源码事实、正确理解、排查入口。
+- 覆盖典型误判：`UploadPart(stream)` 存在但废弃；OpenResty 当前不是动态服务发现；上传成功不等于可下载；Outbox 不等于 exactly once。
+- 最后给登录链路、小文件链路、分片链路、扫描链路四条复盘路径。
+
+验收标准：读者能用本章作为最终复习和排障 checklist。
+
+## 修复优先级
+
+第一批：
+
+```text
+09, 10, 11, 12, 13
+```
+
+原因：这些是文件能力主链路，且当前最容易出现“代码过多、流程不足”的问题。
+
+第二批：
+
+```text
+14, 15, 16, 17, 18
+```
+
+原因：这些是存储、前端、扩展和调试层，容易写成清单，需要改成学习文章。
+
+第三批：
+
+```text
+01, 02, 04, 05, 06, 07, 08
+```
+
+原因：这些已有一定详细度，但需要合并重复的“小补充块”和“源码精读块”，统一文章结构。
+
+最后处理：
+
+```text
+00, 03
+```
+
+原因：`00` 要根据最终章节内容调整导览；`03` 是样板章，只补缺口，不大改结构。
+
+## 最终验收标准
+
+修完后每篇文章要满足：
+
+- 能不看源码先读懂这一章的机制。
+- 能从文章追到关键源码位置。
+- 每个关键结论都有代码证据，但代码不是主体。
+- 涉及状态的章节都有状态转换。
+- 涉及中间件的章节说明它在第几层、做什么、不做什么。
+- `manifest/*.md` 和 `manifest_txt/*.txt` 完全同步。
+- 全文不再出现“只在末尾补一小块代码证据”的结构。
+
+## 建议验证命令
+
+完成每批修复后运行：
+
+```powershell
+# 检查 md/txt 是否同步
+$diffs=@()
+Get-ChildItem manifest -Filter *.md | Sort-Object Name | ForEach-Object {
+  $t=Join-Path 'manifest_txt' ($_.BaseName+'.txt')
+  if (!(Test-Path $t)) { $diffs += 'MISSING_TXT '+$_.Name }
+  else {
+    $a=Get-Content -Raw -Encoding UTF8 $_.FullName
+    $b=Get-Content -Raw -Encoding UTF8 $t
+    if ($a -ne $b) { $diffs += 'DIFF '+$_.Name }
+  }
+}
+if ($diffs.Count -eq 0) { 'ALL_MATCH' } else { $diffs }
+
+# 检查每章是否覆盖核心结构词
+rg -n "本章定位|总链路|状态转换|关键数据结构|源码证据|常见误判|阅读检查" manifest manifest_txt
+```

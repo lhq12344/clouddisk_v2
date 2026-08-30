@@ -1,0 +1,574 @@
+# CloudDisk V2 源码复核版学习文档
+
+> 目的：重新学习这个网盘项目时，不从抽象介绍入手，而是按当前仓库源码证据建立一条“从网关到服务、从同步请求到异步中间件”的阅读路线。
+>
+> 证据口径：本文所有关键结论尽量绑定到仓库文件路径、函数名、结构体字段或配置项。行号来自本次扫描时的当前工作树。
+
+## 3. 架构全景图 High-Level Architecture
+
+### 3.1 分层架构图
+
+```text
+React 前端
+  forward_part/static
+  - services/api.ts 生成 HTTP 请求、JWT Authorization、X-Request-Id
+  - components/AuthPage.tsx / UploadManager.tsx 触发登录、上传、分片上传
+
+接入层 OpenResty
+  forward_part/config/nginx/nginx.conf
+  - :2024 主 HTTP 入口，转发 API 到 cloudisk_backend
+  - :2025 preview/download 静态文件入口
+  - CORS、X-Request-Id、上传流式代理开关
+
+C++ Gateway / Drogon
+  forward_part/gateway/main.cc
+  - 监听 0.0.0.0:38080
+  - 注册到 Consul
+  - Redis 客户端、JWT signing key、Kafka 地址放入 MyAppData
+  - AccountController / FileController / AIController 把 HTTP 转为 gRPC
+
+Go gRPC 业务服务
+  backword_part/account_server/account_srv
+  - account_srv: 登录、注册、邮箱验证、用户信息
+
+  backword_part/file_server/file_srv
+  - file_srv: 文件元数据、小文件流式上传、下载预签名 URL、分片上传、删除、Outbox dispatcher
+
+  backword_part/AI_server
+  - AI_srv: 文件 AI 请求处理
+
+  backword_part/mcp_server
+  - mcp_server: MCP 工具服务与 API key 管理
+
+异步服务
+  other_srv/store_srv
+  - 消费 file.upload.cmd，执行 MinIO 对象读取、ClamAV 扫描、文件状态落库、DLQ
+
+  other_srv/email_srv
+  - C++ Kafka consumer，消费邮件任务并调用邮件服务
+
+基础设施层
+  Nacos: clouddisk.json 配置中心
+  Consul: 服务注册 / 发现 / 健康检查
+  MySQL: GORM 持久化用户、文件、outbox、inbox、DLQ、MCP API key
+  Redis: pending registration、multipart upload session、JWT 黑白名单相关状态
+  Kafka: outbox 投递与异步文件扫描、邮件任务
+  MinIO / AliOSS: 对象存储；当前主链路实际大量使用 MinIO
+  ClamAV: store_srv 读取对象后做病毒扫描
+```
+
+### 3.2 核心模块列表
+
+| 模块 | 层级 | 作用 | 源码证据 |
+| --- | --- | --- | --- |
+| `forward_part/static` | 前端层 | React/Vite UI，负责登录、文件列表、上传、预览、下载、删除、分片上传请求 | `forward_part/static/services/api.ts:64` 统一 request；`forward_part/static/services/api.ts:115` 登录注册接口；`forward_part/static/services/api.ts:187` 小文件上传；`forward_part/static/services/api.ts:200` 分片初始化 |
+| `forward_part/config/nginx` | 接入层 | OpenResty 主入口、CORS、请求 ID、API 代理、静态资源与 preview/download | `forward_part/config/nginx/nginx.conf:44` 监听 2024；`nginx.conf:48` CORS；`nginx.conf:59` 生成/透传 X-Request-Id；`nginx.conf:240` 监听 2025 |
+| `forward_part/gateway` | 网关层 | Drogon HTTP controller，转发到 account/file/AI gRPC 服务，做 JWT 过滤、Consul 注册 | `forward_part/gateway/main.cc:25` Redis；`main.cc:36` 监听；`main.cc:51` Consul 注册；`AccountController.h:30` 用户路由；`FileController.h:30` 文件路由 |
+| `account_srv` | 业务服务 | 用户登录、注册暂存、邮箱验证后建号、用户信息 | `proto/account_srv/account.proto:33` service；`backword_part/account_server/account_srv/protobuf/account.go:31` Signin；`account.go:67` Signup；`account.go:106` VerifyCode |
+| `file_srv` | 业务服务 | 文件元数据、对象 key、上传下载、分片、Outbox 事件生产 | `proto/file_srv/file.proto:171` service；`backword_part/file_server/file_srv/protobuf/file.go:632` UploadFile；`file.go:955` InitMultipart；`file.go:1091` CompleteMultipart |
+| `store_srv` | 异步服务 | 消费 Kafka 文件扫描事件，读 MinIO，调用 ClamAV，更新文件状态，维护 Inbox/DLQ | `other_srv/store_srv/main.go:29` Kafka brokers；`main.go:64` NewFileUploadConsumer；`kafka/kafkacunsumer.go:273` scanObject；`kafkacunsumer.go:325` finalizeClean |
+| `email_srv` | 异步服务 | C++ 邮件服务，消费 Kafka 邮件任务 | `other_srv/email_srv/main.cpp:23` 创建 KafkaConsumer；`other_srv/email_srv/CMakeLists.txt:35` 依赖 librdkafka；`CMakeLists.txt:51` 依赖 hiredis |
+| `internal` | 公共基础设施层 | Nacos/Viper、DB、Redis、Kafka、Consul、JWT、MinIO、AliOSS、ClamAV、日志和拦截器 | `internal/viper_config_centre.go:17` ViperConfig；`viper_config_centre.go:57` init；`viper_config_centre.go:159` 初始化 Redis/DB/Consul/Kafka/Ali/MinIO |
+| `proto` | 服务合同层 | gRPC 请求/响应 message 和 RPC 定义 | `proto/account_srv/account.proto:7` 用户消息；`proto/file_srv/file.proto:6` 文件消息；`proto/AI_srv/ai.proto:22` AIService |
+
+### 3.3 中间件所在层与作用效果
+
+| 中间件 | 所在层 | 作用效果 | 源码证据 |
+| --- | --- | --- | --- |
+| OpenResty / Nginx | 接入层 | 统一入口、CORS、请求 ID、API 转发、小文件/分片上传关闭 buffering | `forward_part/config/nginx/nginx.conf:48` CORS；`nginx.conf:59` access_by_lua；`nginx.conf:136` `/file/upload`；`nginx.conf:173` `/file/uploadpart` |
+| Drogon | 网关层 | C++ HTTP server 与 Controller 路由 | `forward_part/gateway/main.cc:36` addListener；`AccountController.h:30` ADD_METHOD_TO；`FileController.h:30` ADD_METHOD_TO |
+| gRPC / protobuf | 网关到服务通信层 | C++ gateway 使用 generated C++ stub 调 Go gRPC 服务；Go 服务实现 generated Go server interface | `proto/file_srv/file.proto:171` fileService；`forward_part/gateway/controllers/FileController.h:5` 引入 C++ gRPC stub；`backword_part/file_server/file_srv/main.go:64` 注册 Go FileServiceServer |
+| Consul | 服务发现层 | Go gRPC 服务和 C++ gateway 注册服务；网关通过 Consul 发现后端实例 | `internal/concul.go:52` RegisterGrpcService；`internal/concul.go:138` DiscoverService；`forward_part/gateway/ConsulRegister.cpp:3` C++ gateway 注册 |
+| Nacos + Viper | 配置中心层 | 从 `clouddisk.json` 拉配置并热监听，解析进 `internal.ViperConf` | `internal/viper_config_centre.go:57` init；`viper_config_centre.go:112` ListenConfig；`viper_config_centre.go:137` GetConfig；`scripts/nacos-config/clouddisk.json:1` 配置样例 |
+| MySQL + GORM | 持久化层 | 存用户、文件、用户文件关系、outbox、inbox、DLQ、MCP API key | `backword_part/model/accountdb.go:5` Account；`backword_part/model/filedb.go:16` File；`filedb.go:74` Outbox；`filedb.go:98` Inbox |
+| Redis | 状态层 | 注册待验证数据、multipart upload session、JWT 黑白名单相关状态 | `backword_part/account_server/account_srv/protobuf/account.go:93` `pending_reg:<email>`；`backword_part/file_server/file_srv/protobuf/file.go:1014` HSet multipart meta；`forward_part/gateway/main.cc:25` Drogon Redis client |
+| Kafka | 异步事件层 | file_srv Outbox dispatcher 发 `file.upload.cmd`；store_srv consumer 消费扫描；email_srv 消费邮件 | `backword_part/model/filedb.go:49` `FILE_SCAN_REQUESTED`；`filedb.go:50` `file.upload.cmd`；`backword_part/file_server/file_srv/kafkaproduct.go:161` SendMessage；`other_srv/store_srv/main.go:132` Consume |
+| MinIO | 对象存储层 | 小文件流式上传、下载/预览预签名 URL、分片上传 init/presign/complete/abort、对象扫描读取和感染文件删除 | `internal/minio.go:104` MinIOUploadStream；`internal/minio.go:173` PresignedGetObject；`internal/minio.go:185` multipart presign；`other_srv/store_srv/kafka/kafkacunsumer.go:312` MinIOGetObjectStream |
+| AliOSS | 对象存储备用层 | 提供上传、删除、元数据、下载方法，但当前主链路证据集中在 MinIO | `internal/ali_oss.go:37` UploadFile；`internal/ali_oss.go:54` DeleteObject；`internal/viper_config_centre.go:163` InitAli |
+| ClamAV | 安全扫描层 | store_srv 从 MinIO 取对象 stream 后送 ClamAV 扫描，决定文件状态 | `other_srv/store_srv/kafka/kafkacunsumer.go:303` scanObject；`kafkacunsumer.go:318` ScanReaderWithClamAV；`scripts/nacos-config/clouddisk.json:53` ClamAV 配置 |
+| JWT | 鉴权层 | account_srv 签发 JWT；gateway filter 解析 Authorization 并给下游 controller 注入用户身份 | `internal/jwt.go:22` CustomClaims；`account.go:50` claims；`forward_part/gateway/filters/jwt_decode.cc:5` filter；`FileController.cc:18` getArgumentsFromJWT |
+
+### 3.4 数据流向
+
+#### 登录链路
+
+```text
+AuthPage.handleSubmit
+  -> api.signin('/user/signin')
+  -> OpenResty /user/signin
+  -> AccountController::signin
+  -> accountService.Signin gRPC
+  -> account_srv 查询 Account + 校验密码 + 生成 JWT
+  -> gateway 把 token 作为 JSON 返回
+  -> frontend localStorage('oss_token')
+```
+
+证据：`forward_part/static/components/AuthPage.tsx:28` 调 `api.signin`；`forward_part/static/services/api.ts:119` 保存 `oss_token`；`forward_part/config/nginx/nginx.conf:87` 代理 `/user/signin`；`forward_part/gateway/controllers/AccountController.h:31` 路由；`backword_part/account_server/account_srv/protobuf/account.go:31` 查询用户；`account.go:45` 校验密码；`account.go:58` 生成 JWT。
+
+#### 小文件上传链路
+
+```text
+UploadManager
+  -> api.simpleUpload('/file/upload')，header 带 X-File-Name/X-File-Hash/X-File-Size
+  -> OpenResty /file/upload，关闭 proxy buffering
+  -> FileController::LoadFile，JWT 取 userId
+  -> file_srv UploadFile(stream)
+  -> MinIOUploadStream 写对象
+  -> upsert File/UserFile
+  -> enqueueScanRequested 写 Outbox
+  -> OutboxDispatcher 发 Kafka
+  -> store_srv 消费并 ClamAV 扫描
+  -> 更新 File.status = success / infected / scan_failed
+```
+
+证据：`forward_part/static/services/api.ts:187` 小文件上传；`nginx.conf:136` `/file/upload`；`FileController.h:32` 路由；`file.go:632` gRPC stream 收 meta；`file.go:686` object key；`file.go:690` MinIOUploadStream；`file.go:746` upsert；`file.go:225` enqueueScanRequested；`kafkaproduct.go:43` dispatcher；`kafkacunsumer.go:273` 扫描；`kafkacunsumer.go:325` clean 落库。
+
+#### 分片上传链路
+
+```text
+api.initMultipart('/file/initupload')
+  -> file_srv InitMultipart
+  -> MinIO Core.NewMultipartUpload
+  -> Redis HSet mp:meta:<upload_id>
+
+api.presignParts('/file/PresignParts')
+  -> file_srv PresignParts
+  -> Redis HMGet session
+  -> MinIOPresignMultipartPutURL
+
+api.uploadPresignedPart
+  -> 直传 MinIO URL；如果 URL 是 localhost/127.0.0.1，则走 /file/uploadpart 代理
+
+api.completeMultipart('/file/CompleteMultipart')
+  -> file_srv CompleteMultipart
+  -> listUploadedParts
+  -> MinIOMultipartComplete
+  -> upsert File/UserFile + Outbox
+  -> Redis 标记 completed
+```
+
+证据：`forward_part/static/services/api.ts:200` init；`api.ts:207` presign；`api.ts:214` uploadPresignedPart；`api.ts:256` complete；`file.go:955` InitMultipart；`file.go:1003` uploadID；`file.go:1005` MinIOMultipartInit；`file.go:1014` Redis HSet；`file.go:1044` PresignParts；`file.go:1091` CompleteMultipart；`file.go:1145` MinIOMultipartComplete；`file.go:1161` Redis completed。
+
+#### 下载 / 预览 / 删除链路
+
+下载和预览通过 gateway 调 file_srv 查用户文件关系和对象状态，返回 MinIO 预签名 GET URL；删除先删 `UserFile` 关系，如果没有剩余引用再删 `File` 与 MinIO object。
+
+证据：`forward_part/static/services/api.ts:154` download；`api.ts:176` preview；`api.ts:166` delete；`forward_part/gateway/controllers/FileController.h:31` download；`FileController.h:33` showfile；`FileController.h:34` delete；`backword_part/file_server/file_srv/protobuf/file.go:89` buildPresignedGetURL；`file.go:806` DeleteFile；`file.go:839` 事务内删关系/文件；`file.go:858` 删除 MinIO object。
+
+### 3.5 控制反转与依赖关系
+
+这个项目不是 Spring 式容器，主要是“全局初始化 + 显式注册 + generated interface 实现”。Go 侧 `internal/viper_config_centre.go:init()` 拉 Nacos 配置后初始化 Redis、DB、Consul、Kafka、AliOSS、MinIO，全局变量被业务服务直接引用；各 gRPC `main.go` 创建 server 后把实现注册进 generated service interface。C++ gateway 侧由 Drogon 扫描 controller 路由，启动前读取配置并把 Redis、Kafka、JWT、Consul 注册对象放到应用上下文或单例中。
+
+证据：`internal/viper_config_centre.go:159` 初始化顺序；`backword_part/file_server/file_srv/main.go:56` grpc.NewServer；`file_srv/main.go:64` RegisterFileServiceServer；`forward_part/gateway/main.cc:42` Drogon beginning advice；`forward_part/gateway/main.cc:48` 写入 `MyAppData`。
+
+## 4. 核心概念与领域模型 Core Concepts & Domain Model
+
+### 4.1 关键术语表
+
+| 术语 | 定义 | 源码证据 |
+| --- | --- | --- |
+| Account | 用户账户表模型，包含用户名、邮箱、密码 hash、salt、角色等 | `backword_part/model/accountdb.go:5` |
+| File | 全局内容对象元数据，以 `Sha1` 字段保存内容哈希，包含状态、object key、扫描结果 | `backword_part/model/filedb.go:16` |
+| UserFile | 用户与 File 的拥有关系，支持同一内容对象被不同用户/文件名复用 | `backword_part/model/filedb.go:28` |
+| ObjectKey | 对象存储中的实际 key，当前由 `files/<fileHash>` 生成 | `backword_part/file_server/file_srv/protobuf/file.go:57` |
+| pending_scan / success / infected / scan_failed | 文件扫描状态机 | `backword_part/model/filedb.go:9` |
+| Outbox | file_srv 事务内写入的待投递事件表，用于可靠发 Kafka | `backword_part/model/filedb.go:74` |
+| Inbox | store_srv 消费幂等表，用 `event_id` 防止重复处理 | `backword_part/model/filedb.go:98` |
+| DLQ | Dead Letter Queue，主消费失败后的死信记录与恢复机制 | `backword_part/model/dlq.go:18`；`other_srv/store_srv/kafka/dlq_producer.go:17` |
+| Multipart Session | Redis 中 `mp:meta:<upload_id>` 保存的大文件上传会话 | `backword_part/file_server/file_srv/protobuf/file.go:32`；`file.go:1014` |
+| API key | MCP server 的 API key 管理模型 | `backword_part/model/mcp_api_key.go:17` |
+
+### 4.2 核心数据结构字段说明
+
+#### Account
+
+`backword_part/model/accountdb.go:5`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `gorm.Model` | embedded | GORM 标准 ID、CreatedAt、UpdatedAt、DeletedAt |
+| `Mobile` | string | 手机号，varchar(11)，非空，普通索引 |
+| `Password` | string | 编码后的密码 hash，varchar(64)，非空 |
+| `Nickname` | string | 昵称 |
+| `Name` | string | 用户名，唯一索引；登录查询使用该字段 |
+| `Gender` | string | 性别，默认 male |
+| `Role` | int | 角色，注释显示 1 普通用户、2 管理员 |
+| `Salt` | string | 密码 salt，非空 |
+| `Email` | string | 邮箱，唯一索引 |
+
+关键行为：`Signin` 用 `Name` 查用户并用 `password.Verify` 校验 salt/hash；`Signup` 不直接建号，而是把注册数据写 Redis `pending_reg:<email>`，`VerifyCode` 再落 MySQL。证据：`account.go:34`、`account.go:45`、`account.go:93`、`account.go:128`。
+
+#### File / UserFile
+
+`backword_part/model/filedb.go:16`
+
+| 结构体 | 字段 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| `File` | `Sha1` | string | 内容哈希，注释说明历史字段名为 Sha1，但实际保存 SHA-256 语义 |
+| `File` | `Size` | int64 | 文件大小 |
+| `File` | `Status` | string | `pending_scan` / `success` / `infected` / `scan_failed` |
+| `File` | `ObjectKey` | string | MinIO/AliOSS object key |
+| `File` | `ContentType` | string | MIME 类型 |
+| `File` | `ScanDetail` | string | 病毒扫描详情或失败原因 |
+| `File` | `ScannedAt` | *time.Time | 扫描完成时间 |
+| `UserFile` | `AccountID` | uint | 所属用户 ID |
+| `UserFile` | `FileID` | uint | 关联的全局 File ID |
+| `UserFile` | `Name` | string | 用户视角文件名；和 account_id/file_id 组成唯一约束 |
+
+关键行为：`upsertFileAndRelation` 在一个 DB transaction 中复用/创建 `File`，并创建或恢复 `UserFile`；如果需要扫描则调用 `enqueueScanRequested` 写 Outbox。证据：`file.go:255`、`file.go:267`、`file.go:337`、`file.go:225`。
+
+#### FileEventPayload / Outbox / Inbox
+
+`backword_part/model/filedb.go:63`
+
+| 结构体 | 字段 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| `FileEventPayload` | `TxID` | string | 业务事务 ID |
+| `FileEventPayload` | `EventID` | string | 幂等事件 ID |
+| `FileEventPayload` | `FileID` | uint | 文件表 ID |
+| `FileEventPayload` | `UserID` | string | 上传用户 ID |
+| `FileEventPayload` | `Sha1` | string | 内容哈希 |
+| `FileEventPayload` | `Size` | int64 | 文件大小 |
+| `FileEventPayload` | `OssKey` | string | 对象 key |
+| `FileEventPayload` | `ContentType` | string | MIME 类型 |
+| `FileEventPayload` | `EventType` | string | 当前扫描事件为 `FILE_SCAN_REQUESTED` |
+| `Outbox` | `Topic` | string | Kafka topic，当前为 `file.upload.cmd` |
+| `Outbox` | `Payload` | string | JSON 消息体 |
+| `Outbox` | `Headers` | string | JSON headers，例如 `x-request-id` |
+| `Outbox` | `Status` | OutboxStatus | `NEW` / `SENDING` / `SENT` / `FAILED` |
+| `Outbox` | `RetryCount` | int | 发送失败重试次数 |
+| `Outbox` | `NextRetryAt` | time.Time | 下次发送时间 |
+| `Outbox` | `LockedBy` / `LockedUntil` | string / *time.Time | 多实例 claim 锁 |
+| `Inbox` | `EventID` | string | consumer 幂等主键 |
+| `Inbox` | `Status` | InboxStatus | `PROCESSING` / `DONE` / `DLQ` |
+| `Inbox` | `Attempts` | int | 消费尝试次数 |
+| `Inbox` | `DLQFailureID` | *uint | 关联 DLQ 记录 |
+
+关键行为：`enqueueScanRequested` 写 `Outbox`；`OutboxDispatcher.claimBatch` 抢占 NEW/FAILED 记录并置为 SENDING；`sendOne` 发 Kafka；store_srv `tryBeginInbox` 以 `EventID` 抢幂等锁。证据：`file.go:225`、`kafkaproduct.go:109`、`kafkaproduct.go:161`、`kafkacunsumer.go:439`。
+
+#### ViperConfig / 基础设施配置
+
+`internal/viper_config_centre.go:17`
+
+| 字段 | 类型 | 对应中间件 |
+| --- | --- | --- |
+| `RedisConfig` | `RedisConfig` | Redis |
+| `MysqlConfig` | `MysqlConfig` | MySQL / GORM |
+| `ConsulConfig` | `ConsulConfig` | Consul 服务发现 |
+| `JWTConfig` | `JWTConfig` | JWT 签名 |
+| `KafkaConfig` | `KafkaConfig` | Kafka broker |
+| `Alioss` | `Alioss` | AliOSS |
+| `MinIO` | `MinioConf` | MinIO |
+| `ClamAV` | `ClamAVConfig` | ClamAV 扫描 |
+
+配置样例在 `scripts/nacos-config/clouddisk.json:1`，其中包括 Redis、MySQL、Consul、JWT、Kafka、AliOSS、MinIO、ClamAV。
+
+### 4.3 生命周期
+
+#### 用户注册生命周期
+
+1. `Signup` 检查用户名是否已存在。
+2. 用 `go-password-encoder` 生成 salt/hash。
+3. 写 Redis `pending_reg:<email>`，TTL 10 分钟。
+4. `VerifyCode` 读取 pending data，创建 `Account`。
+5. 删除 pending key。
+
+证据：`account.go:70`、`account.go:83`、`account.go:93`、`account.go:110`、`account.go:128`、`account.go:134`。
+
+#### 文件对象生命周期
+
+1. 上传对象到 MinIO。
+2. DB 创建/复用 `File`，初始状态 `pending_scan`。
+3. DB 创建/恢复 `UserFile` 关系。
+4. 写 Outbox `FILE_SCAN_REQUESTED`。
+5. Outbox dispatcher 发 Kafka。
+6. store_srv 消费，ClamAV 扫描。
+7. clean 则 `File.status=success`；infected 则删除对象并 `File.status=infected`；终端失败则 `scan_failed` + DLQ。
+
+证据：`file.go:690`、`file.go:273`、`file.go:166`、`file.go:225`、`kafkaproduct.go:43`、`kafkacunsumer.go:273`、`kafkacunsumer.go:325`、`kafkacunsumer.go:342`、`kafkacunsumer.go:172`。
+
+## 5. 入口与启动流程 Entry Point & Bootstrap
+
+### 5.1 Go 服务入口
+
+| 服务 | main 文件 | 启动证据 |
+| --- | --- | --- |
+| account_srv | `backword_part/account_server/account_srv/main.go` | `func main` 在 `main.go:34`；`grpc.NewServer` 在 `main.go:44`；`RegisterAccountServiceServer` 在 `main.go:49`；Consul 注册在 `main.go:54` |
+| file_srv | `backword_part/file_server/file_srv/main.go` | `func main` 在 `main.go:43`；`grpc.NewServer` 在 `main.go:56`；`RegisterFileServiceServer` 在 `main.go:64`；Outbox dispatcher 在 `main.go:80` |
+| AI_srv | `backword_part/AI_server/main.go` | `func main` 在 `main.go:34`；`RegisterAIServiceServer` 在 `main.go:49`；Consul 注册在 `main.go:54` |
+| mcp_server | `backword_part/mcp_server/main.go` | `func main` 在 `main.go:92`；HTTP server `ListenAndServe` 在 `main.go:222`；Consul 信息在 `main.go:269` |
+| store_srv | `other_srv/store_srv/main.go` | `func main` 在 `main.go:17`；Kafka consumer group 在 `main.go:51`；NewFileUploadConsumer 在 `main.go:64`；Consume loop 在 `main.go:132` |
+
+### 5.2 C++ Gateway 入口
+
+`forward_part/gateway/main.cc` 是 C++ 网关入口：读取配置后创建 Redis client，构造 ConsulRegister，监听 `0.0.0.0:38080`，启用 request stream 和 128MB body 限制，在 beginning advice 中写入 MyAppData 并注册 Consul，最后 `drogon::app().run()`。证据：`main.cc:25`、`main.cc:28`、`main.cc:36`、`main.cc:37`、`main.cc:42`、`main.cc:55`。
+
+### 5.3 配置初始化步骤
+
+Go 侧初始化由 `internal/viper_config_centre.go:init()` 驱动：
+
+1. 创建 Viper 并设置 JSON 配置类型：`viper_config_centre.go:57`。
+2. 从环境变量读取 Nacos host/port/namespace/context/auth：`viper_config_centre.go:61`。
+3. 创建 Nacos config client：`viper_config_centre.go:103`。
+4. 注册 `ListenConfig` 热更新：`viper_config_centre.go:112`。
+5. 初次 `GetConfig(dataId=clouddisk.json, group=dev)`：`viper_config_centre.go:137`。
+6. `v.ReadConfig` + `v.Unmarshal(&ViperConf)`：`viper_config_centre.go:148`。
+7. 初始化 Redis、DB、Consul、Kafka producer、AliOSS、MinIO：`viper_config_centre.go:159`。
+
+### 5.4 第一次请求追踪：登录调用栈
+
+```text
+AuthPage.handleSubmit
+  -> ApiService.signin
+  -> fetch('/user/signin')，headers 自动带 X-Request-Id
+  -> OpenResty /user/signin proxy_pass cloudisk_backend
+  -> AccountController::signin
+  -> account::accountService::Stub::Signin
+  -> AccountServer.Signin
+  -> internal.DB.Where(Account{Name: username}).First
+  -> password.Verify
+  -> internal.GetJWT().GenerateToken
+  -> C++ gateway 返回 token JSON
+  -> localStorage('oss_token')
+```
+
+关键证据：`AuthPage.tsx:28`、`api.ts:76`、`api.ts:119`、`nginx.conf:87`、`AccountController.h:31`、`account.go:31`、`account.go:34`、`account.go:45`、`account.go:58`。
+
+## 6. 源码阅读路线图 Source Code Roadmap
+
+### 第一层：先读合同和全局配置
+
+1. `go.mod:1`：确认 Go module 是 `go_test`，依赖包括 sarama、go-redis、consul/api、mcp-go、minio、nacos-sdk、viper、zap、grpc、gorm。
+2. `proto/account_srv/account.proto:33`：账号服务 RPC。
+3. `proto/file_srv/file.proto:171`：文件服务 RPC，小文件 stream 和 multipart 都在这里。
+4. `proto/AI_srv/ai.proto:22`：AIService。
+5. `scripts/nacos-config/clouddisk.json:1`：本地配置全量样例。
+6. `internal/viper_config_centre.go:17`：Go 服务实际使用的配置结构。
+
+### 第二层：读网关路由和鉴权
+
+1. `forward_part/config/nginx/nginx.conf:44`：OpenResty 2024 主入口。
+2. `forward_part/gateway/main.cc:36`：Drogon gateway 监听 38080。
+3. `forward_part/gateway/controllers/AccountController.h:30`：用户 HTTP 路由。
+4. `forward_part/gateway/controllers/FileController.h:30`：文件 HTTP 路由。
+5. `forward_part/gateway/filters/jwt_decode.cc:5`：JWT filter。
+6. `forward_part/gateway/controllers/FileController.cc:18`：从 request attributes 取 `Name` / `ID`。
+
+### 第三层：读账号服务
+
+1. `backword_part/account_server/account_srv/main.go:34`：服务启动。
+2. `backword_part/account_server/account_srv/protobuf/account.go:31`：Signin。
+3. `account.go:67`：Signup。
+4. `account.go:106`：VerifyCode。
+5. `account.go:142`：Userinfo。
+6. `backword_part/model/accountdb.go:5`：Account model。
+
+### 第四层：读文件服务核心
+
+1. `backword_part/file_server/file_srv/main.go:43`：服务启动和 Outbox dispatcher。
+2. `backword_part/file_server/file_srv/protobuf/file.go:57`：object key 规则。
+3. `file.go:166`：`ensureUserFile`，理解用户文件关系。
+4. `file.go:225`：`enqueueScanRequested`，理解异步扫描事件。
+5. `file.go:255`：`upsertFileAndRelation`，理解 DB 事务边界。
+6. `file.go:632`：小文件上传。
+7. `file.go:806`：删除。
+8. `file.go:955`：分片初始化。
+9. `file.go:1044`：分片预签名。
+10. `file.go:1091`：分片完成。
+
+### 第五层：读异步一致性
+
+1. `backword_part/model/filedb.go:74`：Outbox 表。
+2. `backword_part/file_server/file_srv/kafkaproduct.go:43`：dispatcher 启动。
+3. `kafkaproduct.go:109`：claim batch + row lock。
+4. `kafkaproduct.go:161`：发送 Kafka。
+5. `other_srv/store_srv/main.go:51`：consumer group。
+6. `other_srv/store_srv/kafka/kafkacunsumer.go:219`：processMessageInternal。
+7. `kafkacunsumer.go:439`：Inbox 幂等锁。
+8. `kafkacunsumer.go:325` / `342`：扫描成功/感染落库。
+9. `other_srv/store_srv/kafka/dlq_consumer.go:15`：DLQ consumer 配置与处理。
+
+### 第六层：读对象存储和安全扫描
+
+1. `internal/minio.go:104`：流式上传。
+2. `internal/minio.go:173`：下载/预览预签名 URL。
+3. `internal/minio.go:185`：分片预签名 PUT。
+4. `internal/minio.go:203`：multipart init。
+5. `other_srv/store_srv/kafka/clamav.go:74`：ClamAV stream 扫描。
+6. `other_srv/store_srv/kafka/kafkacunsumer.go:303`：store_srv 如何从 MinIO 取对象并送 ClamAV。
+
+### 第七层：读前端行为
+
+1. `forward_part/static/types.ts:2`：UserInfo。
+2. `forward_part/static/types.ts:13`：FileItem。
+3. `forward_part/static/types.ts:34`：MultipartInitResponse。
+4. `forward_part/static/services/api.ts:64`：统一 HTTP request。
+5. `api.ts:150`：queryFiles。
+6. `api.ts:187`：simpleUpload。
+7. `api.ts:200`：initMultipart。
+8. `api.ts:214`：uploadPresignedPart。
+9. `forward_part/static/components/UploadManager.tsx:139`：分片初始化调用。
+
+## 7. 依赖与生态 Dependencies & Ecosystem
+
+### 7.1 Go 依赖
+
+`go.mod:7` 开始列出主要依赖：
+
+| 依赖 | 作用 | 证据 |
+| --- | --- | --- |
+| `github.com/IBM/sarama` | Kafka producer/consumer | `go.mod:8`；`kafkaproduct.go:13`；`store_srv/main.go:14` |
+| `github.com/aliyun/aliyun-oss-go-sdk` | AliOSS SDK | `go.mod:9`；`internal/ali_oss.go:11` |
+| `go-password-encoder` | 密码 hash/salt | `go.mod:10`；`account.go:39` |
+| `jwt-go` | JWT 生成解析 | `go.mod:11`；`internal/jwt.go:7` |
+| `go-redis/redis/v8` | Redis client | `go.mod:12`；`file.go:20` |
+| `hashicorp/consul/api` | Consul API | `go.mod:15`；`internal/concul.go:8` |
+| `mark3labs/mcp-go` | MCP server/tooling | `go.mod:16`；`backword_part/mcp_server/Tools.go` |
+| `minio-go/v7` | MinIO 对象存储 | `go.mod:17`；`internal/minio.go:13` |
+| `nacos-sdk-go/v2` | Nacos 配置中心 | `go.mod:18`；`viper_config_centre.go:10` |
+| `viper` | 配置解析 | `go.mod:20`；`viper_config_centre.go:13` |
+| `zap` | 结构化日志 | `go.mod:21`；多处 `internal.Logger` |
+| `grpc` / `protobuf` | gRPC 通信和 generated code | `go.mod:22`；`proto/*` |
+| `gorm` / `mysql driver` | MySQL ORM | `go.mod:25`；`internal/db.go:13` |
+
+### 7.2 前端依赖
+
+`forward_part/static/package.json:11` 显示前端只使用 React + Vite + TypeScript + Tailwind 这一组轻量栈：React 19、Vite 6、TypeScript 5.8、Tailwind 3.4。没有 Redux/Zustand 等全局状态库，状态主要在 React component 内部维护。
+
+### 7.3 C++ Gateway / Email 依赖
+
+Gateway：Drogon、protobuf、gRPC、CURL、spdlog、fmt、Nacos C++ SDK、librdkafka、jwt-cpp。证据：`forward_part/gateway/CMakeLists.txt:31`、`:38`、`:44`、`:48`、`:52`、`:57`、`:64`、`:148`。
+
+Email service：C++17、CURL、Threads、fmt、librdkafka、hiredis、Nacos C++ SDK。证据：`other_srv/email_srv/CMakeLists.txt:4`、`:24`、`:35`、`:51`、`:67`。
+
+### 7.4 插件机制 / 扩展面
+
+当前源码证据显示不是传统 Java SPI 插件架构，主要扩展面是：
+
+1. gRPC proto 合同扩展：新增 RPC/message 后 gateway 和 Go 服务都要跟进。
+2. Kafka event type 扩展：`FileEventPayload.EventType` 当前处理 `FILE_SCAN_REQUESTED`，可扩展更多异步事件。
+3. MCP tools 扩展：`backword_part/mcp_server/Tools.go` 管工具定义。
+4. 对象存储抽象扩展：当前有 MinIO 与 AliOSS 两套 client，但主业务链路以 MinIO 为主。
+
+## 8. 构建与测试 Build & Test
+
+### 8.1 Go 后端
+
+仓库 Go module 是 `go_test`，Go 版本声明为 1.24.0。证据：`go.mod:1`、`go.mod:3`。
+
+推荐验证命令：
+
+```powershell
+go test ./...
+go vet ./...
+go build -o bin/account_srv ./backword_part/account_server/account_srv/
+go build -o bin/file_srv ./backword_part/file_server/file_srv/
+go build -o bin/ai_srv ./backword_part/AI_server/
+go build -o bin/mcp_server ./backword_part/mcp_server/
+go build -o bin/store_srv ./other_srv/store_srv/
+```
+
+注意：Go 服务启动会在 `internal/viper_config_centre.go:init()` 阶段尝试连接 Nacos 并拉 `clouddisk.json`，所以本地跑服务不是单纯 `go run` 就够，Nacos/Redis/MySQL/Kafka/MinIO 等依赖也要可用。证据：`viper_config_centre.go:57`、`viper_config_centre.go:137`、`viper_config_centre.go:159`。
+
+### 8.2 前端
+
+`forward_part/static/package.json:6` 定义：
+
+```powershell
+cd forward_part/static
+npm install
+npm run dev
+npm run build
+npm run preview
+```
+
+### 8.3 C++ Gateway
+
+`forward_part/gateway/CMakeLists.txt` 要求 Drogon、protobuf、gRPC、CURL、spdlog/fmt、Nacos C++ SDK、librdkafka 和 jwt-cpp include。推荐：
+
+```powershell
+cd forward_part/gateway
+mkdir build
+cd build
+cmake ..
+cmake --build .
+ctest --output-on-failure
+```
+
+### 8.4 C++ Email Service
+
+`other_srv/email_srv/CMakeLists.txt` 要求 C++17、CURL、fmt、librdkafka、hiredis、Nacos C++ SDK。推荐：
+
+```powershell
+cd other_srv/email_srv
+mkdir build
+cd build
+cmake ..
+cmake --build .
+```
+
+### 8.5 分片上传和性能测试
+
+仓库有 `test/mputest.go` 和 `test/perf_test.sh`。根据项目说明，分片上传测试形态是：
+
+```powershell
+go run test/mputest.go -addr 127.0.0.1:50051 -file ./big.bin -user_id 1001 -parallel 4
+```
+
+源码层面分片上传要重点观察 Redis session 和 MinIO multipart 的状态是否一致。证据：`file.go:1014` 保存 Redis meta；`file.go:1129` list parts；`file.go:1145` complete multipart。
+
+### 8.6 当前测试覆盖率判断
+
+本次扫描没有做完整覆盖率统计，但从文件清单看，存在 `forward_part/gateway/test/test_main.cc`、`test/mputest.go`、`test/perf_test.sh`；Go 单元测试文件没有在核心目录清单中明显出现。当前更像“手动/集成测试脚本 + 少量 C++ gateway 测试”，后续若要重构，建议先补账号服务、文件 upsert/outbox、store consumer 幂等的单元/集成测试。
+
+## 9. 遇到的坑与笔记 Pitfalls & Notes
+
+### 9.1 Nacos 是服务启动的前置依赖
+
+Go 包的 `init()` 会直接创建 Nacos client、监听配置、拉 `clouddisk.json`、初始化所有基础设施 client。若 Nacos 不可用，`ViperConf` 可能为空，后续服务注册、DB、Redis、Kafka、MinIO 都会连带失败。证据：`internal/viper_config_centre.go:57`、`:103`、`:137`、`:159`。
+
+### 9.2 全局 client 隐式依赖较重
+
+业务函数直接引用 `internal.DB`、`internal.RedisClient`、`internal.MinIOClient`、`internal.KafkaProducer`。学习时要先看 `internal/` 初始化，否则直接读业务函数会不知道依赖从哪里来。证据：`account.go:34`、`file.go:134`、`file.go:690`、`kafkaproduct.go:161`。
+
+### 9.3 Outbox 成功发 Kafka 后不能回滚
+
+`OutboxDispatcher.workerLoop` 注释明确说明：Kafka 已发送但 `markSent` 更新失败时，不能回滚 Kafka，只能依赖消费端 inbox 幂等。证据：`backword_part/file_server/file_srv/kafkaproduct.go:101`。
+
+### 9.4 Inbox 是消费端幂等核心
+
+store_srv 处理消息前 `tryBeginInbox` 创建/抢占 `Inbox`；如果已 `DONE` 则跳过，如果锁被别的实例持有则返回 `ErrInboxLocked`。证据：`other_srv/store_srv/kafka/kafkacunsumer.go:248`、`:439`、`:461`、`:500`。
+
+### 9.5 文件上传后不是立即可下载
+
+新文件默认 `pending_scan`，store_srv 扫描成功后才变 `success`。删除和查询逻辑也会检查 `File.Status`。证据：`model/filedb.go:9`；`file.go:277` 创建 pending_scan；`file.go:829` 删除前检查 pending scan；`kafkacunsumer.go:325` clean 后 success。
+
+### 9.6 分片上传当前实际走“预签名直传”，gRPC UploadPart 已废弃
+
+`UploadPart` gRPC 方法还在 proto 里，但 Go 实现直接返回 Unimplemented，提示使用 `PresignParts + direct multipart upload`。证据：`proto/file_srv/file.proto:181`；`backword_part/file_server/file_srv/protobuf/file.go:1087`。
+
+### 9.7 用户身份以 JWT 注入为准，multipart 会校验 owner
+
+Gateway 从 JWT attributes 拿 `Name` / `ID`，file_srv 的 multipart 函数通过 gRPC metadata 中的 `x-user-id` 做 owner 校验。证据：`FileController.cc:18`；`file.go:143`；`file.go:155`。
+
+### 9.8 OpenResty 当前 upstream 是固定本地 Gateway，不是真正 Lua 动态 upstream
+
+虽然存在 `lua_shared_dict consul_services` 和 Lua 文件，但 `nginx.conf` 当前 `upstream cloudisk_backend` 固定到 `127.0.0.1:38080`，注释说明本地开发环境避免依赖镜像内缺失的 `lua-resty-http`。证据：`forward_part/config/nginx/nginx.conf:36`、`:39`、`:40`；Lua 文件存在于 `forward_part/config/nginx/lua/`。
+
+### 9.9 C++ 构建依赖容易卡环境
+
+Gateway 的 CMake 对 `librdkafka++` 缺失直接 `FATAL_ERROR`；email_srv 对 `librdkafka` 和 `hiredis` 缺失也直接失败。证据：`forward_part/gateway/CMakeLists.txt:81`、`:84`；`other_srv/email_srv/CMakeLists.txt:44`、`:60`。
+
+### 9.10 文件名和内容哈希要区分
+
+`File.Sha1` 是内容哈希，`UserFile.Name` 是用户视角文件名；下载/删除通常需要通过用户关系表确认权限。证据：`model/filedb.go:16`、`:28`；`file.go:817` 删除时查 `UserFile` 并 preload `File`。
+
+## 附：建议复习顺序
+
+1. 先画架构图：用第 3 章表格把层级和中间件位置记住。
+2. 再读合同层：`proto/account_srv/account.proto`、`proto/file_srv/file.proto`、`proto/AI_srv/ai.proto`。
+3. 接着读入口：`internal/viper_config_centre.go`、各服务 `main.go`、`forward_part/gateway/main.cc`、`nginx.conf`。
+4. 然后追登录链路：AuthPage → api.ts → nginx → AccountController → account.go → JWT。
+5. 再追上传链路：UploadManager → api.ts → nginx → FileController → file.go → MinIO → Outbox → Kafka → store_srv → ClamAV → File.status。
+6. 最后补高级主题：MCP API key、DLQ、C++ email service、K8s/启动脚本、性能测试。
+

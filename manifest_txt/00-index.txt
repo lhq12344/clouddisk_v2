@@ -1,0 +1,113 @@
+# 00. CloudDisk V2 源码复核学习 Manifest
+
+## 本章定位
+
+本目录用于重新学习 `clouddisk_v2`，顺序按"由深到浅、从入口到服务、从链路到数据结构"组织。目标不是背功能列表，而是能画出链路、解释每层中间件作用、定位关键代码、说明核心字段生命周期。
+
+## 总链路
+
+这套 manifest 的阅读路线按系统运行链路组织：
+
+```text
+全局架构 -> OpenResty 入口 -> Drogon Gateway -> JWT/gRPC/配置 -> 账号/文件领域 -> 上传/下载/分片 -> Outbox/Kafka/store scan -> MinIO/前端/AI/MCP -> 构建调试/坑点复盘
+```
+
+最终目标不是读完文件，而是能用这些章节定位问题：请求卡在哪一层、状态停在哪一步、哪个数据结构字段能证明当前事实。
+
+## 统一格式约定（全部章节与 03 章同规格）
+
+每一章都以 03 章（`03-cpp-gateway-drogon.md`）为格式标杆，每个小节统一为三段式：
+
+1. **主题段落**：先用自然语言说明这一节讲什么、为什么重要。
+2. **代码证据块**：每个小节至少一个，带 `文件名:行号` 锚点。所有代码块均从真实源码摘录，写文档时已逐一 Read 验证；行号会随代码变动漂移，锚点找不到时按"路径 + 符号名"搜索（如 `file.go` 的 `buildObjectKey`）。
+3. **解释**：逐条分析代码块，说明它证明了什么、边界在哪里。
+
+章节末尾统一有「阅读检查」自测。每章的证据不是总结性摘录，而是"结论必须能回到一个 `type`、`func`、`ADD_METHOD_TO`、`stub->async()`、`gorm.Transaction`、`Kafka consumer` 或 nginx 指令"。
+
+## 建议阅读顺序
+
+1. `01-architecture-panorama.md`：先建立全景图，区分同步 HTTP/gRPC 链路和异步 Kafka/Store 链路。
+2. `02-request-entry-openresty.md` 到 `06-config-center-and-shared-infra.md`：从 OpenResty、Drogon、JWT、gRPC、配置中心把入口层读透。
+3. `07-account-service.md` 到 `11-multipart-upload-resume.md`：进入账号与文件主业务，重点跟踪一次登录、一次小文件上传、一次分片续传。
+4. `12-outbox-kafka-inbox-dlq.md` 到 `14-object-storage-minio-alioss.md`：理解异步一致性、病毒扫描、对象存储边界。
+5. `15-frontend-api-and-state.md` 到 `18-pitfalls-and-reading-checklist.md`：回到前端驱动、AI/MCP 扩展、构建调试和坑点清单。
+
+## 章节清单
+
+| 章节 | 主题 | 核心源码锚点（主证据文件） | 读完应能回答 |
+| --- | --- | --- | --- |
+| 01 | 架构全景 | `start_all.sh`、`internal/viper_config_centre.go`、`nginx.conf`、`file.go` UploadFile | Client、OpenResty、Drogon、Go gRPC、Store、DB/Redis/Kafka/MinIO 各在什么层 |
+| 02 | OpenResty | `forward_part/config/nginx/nginx.conf`（listen/CORS/Request ID/buffering）、`lua/consul_service.lua`、`vite.config.ts` | `:2024`、`:2025`、CORS、Request ID、上传 buffering、路由转发分别做什么 |
+| 03 | Drogon Gateway | `gateway/main.cc`、`FileController.h/cc`、`ArcCache/ARCtemp.h`、`jwt_decode.cc` | C++ 网关为什么存在，controller/filter/Consul/cache/gRPC stub 怎么配合 |
+| 04 | 鉴权系统 | `internal/jwt.go`、`AccountController.cc`、`jwt_decode.cc`、`services/api.ts` | JWT 从生成、存储、携带、过滤、注入用户身份到服务端校验的完整链路 |
+| 05 | gRPC/发现 | `proto/*.proto`、各 `main.go`（ListenAutoPort→Consul）、`ARCtemp.h:FindService`、`GrpcHttp.h` | proto、generated code、server register、client stub、Consul 发现之间的关系 |
+| 06 | 配置中心/基础设施 | `viper_config_centre.go`、`internal/db.go|redis.go|kafka.go|minio.go` | Nacos→Viper 热更新、`ViperConf`、`internal/` 全局 client 初始化链 |
+| 07 | 账号服务 | `account.go`（Signup/Signin/VerifyCode/Userinfo）、`AccountController.cc`、`emailServer.h` | 注册、邮箱验证码、登录、用户信息的状态变化和数据落点 |
+| 08 | 文件领域模型 | `model/filedb.go`、`model/dlq.go`、`file.go` 事务边界 | `File`、`UserFile`、`Outbox`、`Inbox`、`DLQFailure` 字段含义 |
+| 09 | 小文件上传 | `api.ts:simpleUpload`、`FileController.cc:UploadFileProxy`、`file.go:UploadFile`、`kafkaproduct.go` | HTTP body 如何流式进入 gRPC，再进入 MinIO，并进入 pending_scan |
+| 10 | 下载/预览/阅读 | `App.tsx`、`api.ts:getDownloadUrl`、`file.go:Filedowm/Showfile`、`minio.go` presign | 文件为什么必须 `success` 后才能下载/预览，预签名 URL 怎么返回 |
+| 11 | 分片/断点续传 | `UploadManager.tsx`、`file.go:InitMultipart/PresignParts/Status/CompleteMultipart`、`minio.go` | `InitMultipart`、`PresignParts`、`Status`、`CompleteMultipart` 的职责边界 |
+| 12 | Outbox/Kafka/Inbox/DLQ | `kafkaproduct.go`、`filedb.go:Outbox/Inbox`、`kafkacunsumer.go:tryBeginInbox`、`dlq_*.go` | 为什么需要 outbox，consumer 如何幂等，失败如何进 DLQ |
+| 13 | Store/ClamAV | `kafkacunsumer.go`、`clamav.go`、`internal/minio.go`、`clamd_local.sh` | 文件何时真正可用，clean/infected/scan_failed 如何落库 |
+| 14 | 对象存储 | `internal/minio.go`、`internal/ali_oss.go`、`file.go:buildObjectKey` | MinIO 与 AliOSS 在当前代码里的职责和主链路边界 |
+| 15 | 前端 API/状态 | `api.ts`、`AuthPage.tsx`、`UploadManager.tsx`、`App.tsx`、`types.ts` | UI 如何维护 token、上传任务、文件状态、预览阅读 |
+| 16 | AI/MCP | `AIController.cc`、`ai.proto`、`mcp_server/`（`middleware/auth.go`、`apikey/manager.go`、`Tools.go`） | AI 与 MCP 服务在当前源码中如何接入网盘能力 |
+| 17 | 构建测试调试 | `go.mod`、`package.json`、`CMakeLists.txt`、`start_all.sh`、`test/mputest.go`、`test/perf_test.sh` | Go、C++、React、Nacos、分片测试、性能测试入口 |
+| 18 | 坑点清单 | 每条坑点下挂真实代码证据（nginx upstream、UploadPart 废弃、pending_scan 等） | 重新学习时最容易误判的地方和自测问题 |
+
+## 学习验收标准
+
+- 能画出 `Client -> OpenResty -> Drogon Gateway -> Go gRPC service -> MySQL/Redis/MinIO/Kafka` 的主链路。
+- 能解释每个中间件在什么层发挥作用：Nacos 配置、Consul 发现、Redis 会话/分片状态、Kafka 异步事件、MySQL 元数据、MinIO 对象、ClamAV 扫描。
+- 能说明 `File.status` 从 `pending_scan` 到 `success/infected/scan_failed` 的状态变化。
+- 能指出当前真实实现边界：OpenResty upstream 固定到 `127.0.0.1:38080`；gRPC `UploadPart(stream)` 在 file_srv 中返回 `codes.Unimplemented`（消息 "deprecated, use PresignParts + direct multipart upload"），实际走预签名直传/代理。
+
+## 状态转换总览
+
+```text
+身份：未登录 -> 登录成功 -> JWT/localStorage -> Gateway attributes -> logout/过期/黑名单
+文件：上传完成 -> pending_scan -> success/infected/scan_failed
+分片：init -> partial -> completed -> pending_scan -> scan result
+异步：Outbox new -> Kafka sent -> Inbox processing -> done/DLQ
+前端：pending_scan 轮询 -> success 开放下载/预览；infected/scan_failed 展示阻断
+```
+
+每章的细节都应能回到这些状态转换中的某一段。
+
+## 关键数据结构 / 字段总览
+
+- `JWT / Authorization / oss_token`：用户会话身份。
+- `X-Request-Id`：全链路日志与排障关联。
+- `File / UserFile / File.status / object_key`：文件领域核心。
+- `upload_id / oss_upload_id / uploaded_parts`：分片上传恢复核心。
+- `Outbox / Inbox / DLQFailure`：异步一致性核心。
+- `MCPAPIKey`：MCP 工具调用鉴权核心。
+
+## 常见误判总览
+
+- 入口层和应用网关不是一层：OpenResty 是入口代理，Drogon 是应用网关。
+- 上传成功不等于文件可读：必须等扫描变成 `success`。
+- Consul 不是 RPC 合同：proto/generated stub 才是合同。
+- MinIO 不保存业务权限：权限和状态在业务服务/MySQL。
+- 前端不是纯展示：它维护 token、上传任务、断点 session、pending_scan 轮询。
+
+## 证据约定
+
+每章都引用当前仓库路径和函数/结构体名。行号会随代码变动漂移，因此本 manifest 优先使用"路径 + 函数/结构体/配置项"作为稳定锚点，关键处补充当前复核到的行号。
+
+所有代码证据块的来源分四类：
+
+```text
+入口证据：forward_part/config/nginx/nginx.conf -> forward_part/gateway/controllers/*.h
+转发证据：forward_part/gateway/controllers/*.cc -> proto/* -> backword_part/*/protobuf/*.go
+数据证据：backword_part/model/*.go -> internal/*.go
+异步证据：file_srv/protobuf/file.go -> file_srv/kafkaproduct.go -> other_srv/store_srv/kafka/*.go
+```
+
+验证方法：打开章节中标注的路径，先找结构体/函数名，再看调用点。不要只读文字总结；每个关键判断都应能回到一个 `type`、`func`、`ADD_METHOD_TO`、`stub->async()`、`gorm.Transaction` 或 `Kafka consumer` 代码块。
+
+## 读源码时的已知陷阱（详见 18 章）
+
+- `forward_part/gateway/` 下同时有 `consul.h`（`forward_part/internal/consul.h`）和 `concul.go`（`internal/concul.go`），文件名相似但前者是 C++ 网关的 Consul HTTP 客户端，后者是 Go 服务的注册助手，不要混读。
+- 同一服务名在 Account/File/AI 三个 controller 里各有独立 `KArcCache` 缓存，stub 不共享。
+- `store_srv` 的消费文件名是 `kafkacunsumer.go`（少一个字母 s），检索时不要拼成 `kafkaconsumer.go`。

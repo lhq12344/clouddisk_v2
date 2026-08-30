@@ -15,11 +15,14 @@ Client → OpenResty (:2024) → C++ Gateway (Drogon) → Go gRPC Services
                                 ├── AI_srv — AI features
                                 └── mcp_server — MCP tool server
 
-file_srv → Kafka (outbox pattern) → store_srv (consumer) → MinIO/AliOSS
+file_srv → Kafka (outbox pattern) → store_srv (consumer) → ClamAV scan → MinIO/AliOSS
+                                            └─ failed events → DLQ topic, replayed by DLQ consumer
 email_srv (C++) ← Kafka — email notifications
 ```
 
 Infrastructure: Nacos (config center) → Viper, Consul (service discovery), Kafka (async events), MySQL/GORM, Redis, MinIO/AliOSS.
+
+Uploads are client-streaming gRPC: `UploadFile(stream UploadFileReq)` and multipart `UploadPart(stream UploadPartReq)` (proto/file_srv/file.proto).
 
 ## Go Module Path
 
@@ -31,12 +34,26 @@ The Go module is named `go_test` (in go.mod). All imports use this prefix: `go_t
 ```bash
 go build -o bin/account_srv ./backword_part/account_server/account_srv/
 go build -o bin/file_srv    ./backword_part/file_server/file_srv/
+go build -o bin/ai_srv      ./backword_part/AI_server/
+go build -o bin/mcp_server  ./backword_part/mcp_server/
 go build -o bin/store_srv   ./other_srv/store_srv/
 
 go run ./backword_part/account_server/account_srv/
 go run ./backword_part/file_server/file_srv/
 go run ./other_srv/store_srv/
 ```
+
+### Full-Stack Startup Scripts
+
+`scripts/project_start_scripts/` manages the whole stack — OpenResty (:2024), C++ gateway (:8080), Go services, frontend (:3000):
+
+```bash
+./scripts/project_start_scripts/start_all.sh   # start everything (auto-builds gateway if missing)
+./scripts/project_start_scripts/status.sh      # per-service status (PID, mem, recent logs)
+./scripts/project_start_scripts/stop_all.sh    # graceful stop
+```
+
+Logs go to `log/`, PIDs to `.pids/` at repo root. Requires infra (Nacos, Consul, Kafka, MySQL, Redis, MinIO) running first; `scripts/import-nacos-config.sh` pushes the config to Nacos.
 
 ### Frontend (React 19 + Vite 6)
 ```bash
@@ -100,5 +117,7 @@ go run test/mputest.go -addr 127.0.0.1:50051 -file ./big.bin -user_id 1001 -para
 - Config flows from Nacos → Viper → `internal.ViperConf` global struct with hot-reload
 - Each gRPC service follows: `ListenAutoPort()` → `grpc.NewServer()` → register service → Consul register → `Serve()` → `ElegantExit()`
 - Frontend uses `ApiService` singleton in `services/api.ts`, JWT in `localStorage('oss_token')`
-- Async file ops use outbox pattern: write Outbox row in DB transaction → Kafka → store_srv consumer with Inbox idempotency
+- Async file ops use outbox pattern: write Outbox row in DB transaction → Kafka (`file.upload.cmd`) → store_srv consumer with Inbox idempotency; failed events land on the `.dlq` topic and are replayed by a low-frequency DLQ consumer (`backword_part/model/dlq.go`, `other_srv/store_srv/kafka/`)
+- store_srv scans uploaded objects with ClamAV (`internal/clamav.go`, `other_srv/store_srv/kafka/clamav.go`) — Nacos `clouddisk.json` must include a `clamav` section (host/port or unix socket)
+- Multipart upload lifecycle: `InitMultipart` → `PresignParts` → `UploadPart` (streaming) → `CompleteMultipart`/`AbortMultipart`; `ResolveFileHash` for dedup
 - Protobuf Go package convention: `option go_package = "clouddisk_v2/<service>/protobuf;<alias>pb"`

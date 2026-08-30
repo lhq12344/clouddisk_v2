@@ -1,0 +1,395 @@
+# 02. 请求入口层：OpenResty 到底做了什么
+
+## 本章定位
+
+OpenResty 是最外层入口。它不处理业务，不验证 JWT，不直接访问数据库。它主要负责统一端口、静态资源、CORS、Request ID、反向代理，以及上传/预览这类对 buffering 敏感的路由配置。
+
+## 总链路
+
+```text
+浏览器请求 -> OpenResty :2024 -> CORS/OPTIONS/request id -> Consul 缓存选择 gateway_srv -> Drogon Gateway
+上传请求 -> /file/upload 或 /file/uploadpart -> request buffering off -> Drogon streaming/proxy logic
+辅助预览 -> :2025 /preview alias 或后续业务 presigned URL -> 浏览器读取
+```
+
+OpenResty 的关键边界：只处理入口 HTTP 形态，不进入业务身份、文件归属、gRPC 合同和数据库状态。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+http {
+	# MIME types
+	include /usr/local/openresty/nginx/conf/mime.types;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- `log_format traced` 把 `$http_x_request_id` 直接打进 access log，说明入口层把 Request ID 当作一等公民——排障时先看 nginx 日志的 `rid=`，再顺着它去 Drogon/Go 日志里找同一条链路。
+- 性能与传输参数（sendfile/tcp_nopush/tcp_nodelay/keepalive/gzip）都在 http 层统一配置，与业务 location 无关，是“入口只做传输优化”的体现。
+- 整份配置里没有 JWT 解析、没有 DB/Redis 操作、没有业务路由判断——它只做端口、头和转发，业务留给了 Drogon。
+
+## 端口与路由
+
+- `:2024` 是主入口：承载前端 SPA、用户 API、文件 API、AI API。
+- `:2025` 是预览/下载静态入口：`location /preview/` 指向文件预览类路径。
+- `upstream cloudisk_backend` 通过 `balancer_by_lua_block` 从 Consul 缓存中动态选择 `gateway_srv`，缓存未就绪时回退到 `127.0.0.1:38080`。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+	# ============ 动态 upstream ============
+	upstream cloudisk_backend {
+		# 本地开发环境固定转发到 Gateway :38080，避免依赖镜像内缺失的 lua-resty-http。
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+	}
+```
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+	server {
+		listen 2025;
+		server_name _;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+	}
+```
+
+解释：
+
+- `upstream cloudisk_backend` 已接入 `balancer_by_lua_block`：每个代理请求进入 upstream 负载均衡阶段时都会调用 `balancer.pick("gateway_srv")`，由 Lua 决定本次请求打到哪个 Gateway 实例。
+- `server 127.0.0.1:38080` 现在是 fallback peer，不再是唯一主逻辑：当 Consul 缓存为空、解析失败或 `set_current_peer` 失败时，OpenResty 仍可回退到本地 Gateway，避免入口直接 502。
+- `gateway_srv` 这个服务名来自 C++ Gateway 启动注册逻辑：`forward_part/gateway/main.cc` 中 `serviceName = "gateway_srv"`，因此 OpenResty 查询 Consul 时必须使用同一个 key。
+- `client_max_body_size 128m` 与 Drogon 的 `setClientMaxBodySize(128M)` 一致，说明上传体积上限在入口层就显式放开并和网关保持一致。
+- `:2025` 的 `/preview/` 与 `/download/` 都是 `alias` 到本地磁盘目录的静态文件服务：`inline` 内联预览（`/preview/`）、`attachment` 下载（`/download/`），文件名来自 `?filename=` 查询参数并通过 `Content-Disposition` 响应头回给浏览器。
+- 注意：`:2025` 的 alias 指向硬编码路径 `/home/lihaoqian/project/clouddisk_v2/storage/`（WSL/容器环境路径）。本地 Windows 直接跑 nginx 时该路径不存在，需按实际存储目录调整，否则预览会 404。它也说明 `:2025` 和核心 file service 的预签名 URL 机制不是同一条路径。
+
+## CORS 和 OPTIONS
+
+OpenResty 在入口统一加跨域头，包括 `Content-Type`、`Authorization`、`X-Request-Id`。这让浏览器前端可以携带 JWT 请求后端。预检请求由 Nginx 层直接处理，避免进入 Drogon 和 gRPC。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+		# CORS headers
+		add_header Access-Control-Allow-Origin * always;
+		add_header Access-Control-Allow-Headers "Content-Type,Authorization,X-Requested-With,X-Request-Id" always;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+解释：
+
+- 四个 `add_header ... always` 覆盖了跨域三要素：允许任意来源（`*`）、允许携带的头（含 `Authorization` 和 `X-Request-Id`）、允许的方法；`Access-Control-Max-Age 86400` 让浏览器缓存预检结果一整天，减少 OPTIONS 请求次数。
+- `if ($request_method = OPTIONS) { return 204; }` 在 Nginx 层直接终结预检请求：OPTIONS 根本不会 `proxy_pass` 到 Drogon，更不会触发 gRPC 调用。
+- 这同时解释了“为什么鉴权放 gateway 而不是 OpenResty”：入口层只管放行跨域头，真正校验 JWT 的是 Drogon 的 `jwt_decode` filter（详见 03/04 章）。
+
+## Request ID
+
+`access_by_lua_block` 会优先使用上游传入的 `X-Request-Id`，没有则生成一个，然后写入请求头并在响应中返回。效果是后续 Drogon、gRPC、日志、Kafka header 可以围绕同一个 request id 串联排障。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+		access_by_lua_block {
+			-- 1 优先用上游传入的 X-Request-Id
+			local rid = ngx.var.http_x_request_id
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+代码证据：Request ID 在下游的消费点
+
+`forward_part/gateway/filters/jwt_decode.cc`：
+
+```cpp
+	// 提取 X-Request-Id 存入 request attributes
+	auto requestId = req->getHeader("X-Request-Id");
+	if (!requestId.empty())
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+`internal/interceptor.go`：
+
+```go
+func extractRequestID(ctx context.Context) context.Context {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`other_srv/store_srv/kafka/kafkacunsumer.go`：
+
+```go
+func extractKafkaRequestID(msg *sarama.ConsumerMessage) string {
+	for _, h := range msg.Headers {
+		if h != nil && string(h.Key) == "x-request-id" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 生成策略：上游（通常是前端 api.ts 里 `crypto.randomUUID()` 生成的）已有则沿用，否则用 `ngx.now()+pid+connection+connection_requests` 拼一个简易 ID——刻意不依赖外部库。
+- 透传策略：`set_header` 发给后端（Drogon），`ngx.header` 回给浏览器，`ngx.ctx` 存给 `balancer_by_lua`；后者用 request id 做 hash，让同一 request id 在多 Gateway 实例场景下稳定落到同一个实例。
+- 消费链路完整闭环：Drogon `jwt_decode` 把它放进 request attributes -> FileController 转成 gRPC metadata（`context->AddMetadata("x-request-id", rid)`）-> Go 侧 `RequestIDUnaryInterceptor` 注入 context -> file_srv 写 Outbox 时 `marshalOutboxHeaders` 把它放进 `Outbox.Headers` -> dispatcher 转成 Kafka RecordHeader -> store_srv `extractKafkaRequestID` 取出挂到日志上。
+- 所以一条文件上传请求，从 nginx access log 的 `rid=` 到 store_srv 的 `request_id` 字段，全部是同一个值。
+
+## 上传路由为什么特殊
+
+`/file/upload` 和 `/file/uploadpart` 是文件体路由。它们通常要关闭或降低 proxy buffering，避免大文件先完整落在 Nginx 临时缓冲后才转发，影响流式上传和内存/磁盘压力。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+		location = /file/upload {
+			proxy_pass http://cloudisk_backend;
+			proxy_set_header Host $host;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+```nginx
+		location = /file/uploadpart {
+			proxy_pass http://cloudisk_backend;
+			proxy_set_header Host $host;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+解释：
+
+- 两个 location 与其它 API location 的唯一差异就是多了 `proxy_request_buffering off;` 和 `proxy_buffering off;`：请求体边收边转（不落 Nginx 临时文件），响应体也边收边给前端。
+- 这对 Drogon 侧的 `enableRequestStream(true)` + gRPC 流式上传（`UploadFile(stream)`）是必要条件：如果 Nginx 先把整个 128M 文件体缓冲完再转发，流式语义就名存实亡了。
+- 对照其它 location（如 `/file/query`）没有任何 buffering 指令，说明只有文件体路由才需要这种特殊化，普通 JSON API 保留默认缓冲即可。
+
+## API 映射关系
+
+OpenResty 把用户、文件、AI 的 HTTP 路由统一转到 `cloudisk_backend`。真正的 controller 逻辑在 Drogon：
+
+- `/user/signup`, `/user/signin`, `/user/info` -> `AccountController`
+- `/file/query`, `/file/upload`, `/file/download`, `/file/showfile`, `/file/initupload`, `/file/PresignParts`, `/file/CompleteMultipart` -> `FileController`
+- `/AI` -> `AIController`
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+		location = /user/signin {
+			proxy_pass http://cloudisk_backend;
+			proxy_set_header Host $host;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+```nginx
+		############################AI服务######################################
+		location = /AI {
+			proxy_pass http://cloudisk_backend;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+代码证据：`forward_part/static/vite.config.ts`（开发模式下的直连路径）
+
+```ts
+export default defineConfig(({ mode }) => {
+    const env = loadEnv(mode, '.', '');
+    const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:38080';
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+});
+```
+
+解释：
+
+- 每个 `location = /xxx` 精确匹配 + `proxy_pass http://cloudisk_backend`，三个 `proxy_set_header`（Host/X-Real-IP/X-Forwarded-For）把原始客户端信息带给网关，Nginx 自己不消费这些头。
+- location 清单与 Drogon `FileController.h` 的 `ADD_METHOD_TO` 一一对应（`/file/query`、`/file/upload`、`/file/uploadpart`、`/file/PresignParts`、`/file/CompleteMultipart`、`/file/Status` 等），前端调什么、入口转发什么、网关注册什么，三条清单是同一张表。
+- 开发模式有一条独立路径：`vite.config.ts` 的 proxy 让 `:3000` 直接把 `/user`、`/file`、`/AI` 代理到 `http://127.0.0.1:38080`——dev 下前端**绕过 OpenResty** 直连网关，而生产 build 后静态文件由 OpenResty 的 `location /` 提供、API 走 `:2024`。读代码时注意区分这两种拓扑。
+- `'/clouddisk': { target: 'http://127.0.0.1:30900' }` 是 MinIO NodePort 的直连代理：分片上传时浏览器把预签名 URL 经 Vite dev server 转发给 MinIO，避免系统代理劫持 NodePort 流量。
+
+## Lua 文件的真实边界
+
+`forward_part/config/nginx/lua/consul_service.lua` 和 `lua/balancer.lua` 现在已经被 active `nginx.conf` 接入 `cloudisk_backend`。动态路由不是在每个 location 里写死多个 `proxy_pass`，而是在 upstream 的 balancer 阶段改写当前 peer。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+	lua_package_path "/home/lihaoqian/project/clouddisk_v2/forward_part/config/nginx/?.lua;;";
+
+	lua_shared_dict consul_services 10m;
+```
+
+代码证据：`forward_part/config/nginx/lua/consul_service.lua`
+
+```lua
+function _M:fetch()
+    local httpc = http.new()
+
+... 省略非关键行，保留完整路径/锚点见上文 ...
+end
+```
+
+代码证据：`forward_part/config/nginx/lua/balancer.lua`
+
+```lua
+function _M.pick(service_name)
+    local dict = ngx.shared.consul_services
+    local json = dict:get(service_name)
+... 省略非关键行，保留完整路径/锚点见上文 ...
+end
+```
+
+解释：
+
+- 基础件已就位：`lua_package_path` 声明了 Lua 模块目录，`lua_shared_dict consul_services 10m` 分配了 10M 共享内存供 `consul_service.lua` 缓存实例列表（`self.dict:set(...)` 写入）。
+- `consul_service.lua` 的 `fetch()` 是完整的“查 Consul passing 实例 -> 写共享字典”实现；`balancer.lua` 的 `pick()` 从共享字典读列表，用 `ngx.crc32_short(request_id)` 做一致性 hash（保证同一请求 id 打到同一实例），再 `balancer.set_current_peer` 选上游。
+- `init_worker_by_lua_block` 是后台刷新入口：worker 0 启动后立刻执行一次 `ngx.timer.at(0, refresh_gateway_instances)`，之后用 `ngx.timer.every(refresh_interval, ...)` 每 5 秒刷新一次 Consul。
+- `consul_service.lua` 的 `fetch()` 请求 `http://<consul>/v1/health/service/gateway_srv?passing=true`，只接收健康实例；成功后把 `Service.Address:Service.Port` 数组 JSON 写入 `ngx.shared.consul_services`。
+- `balancer.lua` 的 `pick()` 在 upstream 阶段读取共享缓存，用 `ngx.ctx.request_id` 做 `crc32` 取模；多实例时同一 request id 会稳定选择同一个 Gateway，缓存异常时返回失败，`nginx.conf` 失败分支会显式 `set_current_peer("127.0.0.1", 38080)`。
+- 结论：OpenResty 现在承担第一跳 Gateway 动态发现；Drogon 仍承担第二跳 gRPC 服务动态发现。两层都查 Consul，但服务名不同：OpenResty 查 `gateway_srv`，Drogon 查 `account_srv` / `file_srv` / `AI_srv`。
+
+## 状态转换
+
+OpenResty 不改变业务状态，但会改变请求的入口处理状态：
+
+```text
+普通请求 -> CORS header 注入 -> X-Request-Id 生成/透传 -> balancer 按 Consul 缓存选择 Gateway -> proxy_pass Drogon
+OPTIONS 预检 -> CORS header -> 204 -> 不进入 Drogon
+上传请求 -> request buffering off -> 边收边转发 -> Drogon 继续处理
+```
+
+这里没有 `File.status`、JWT 黑白名单或 gRPC 状态变化；这些都发生在后续 Gateway/服务层。
+
+## 关键数据结构 / 字段
+
+- `X-Request-Id`：入口层生成或透传的全链路关联 id。
+- `Authorization`：OpenResty 只透传，不解析。
+- `cloudisk_backend`：动态 upstream；正常路径由 `balancer_by_lua_block` 选择 Consul 中的 `gateway_srv` passing 实例，失败时 fallback 到 `127.0.0.1:38080`。
+- `consul_services`：OpenResty `lua_shared_dict`，缓存 `gateway_srv -> ["host:port", ...]` 实例列表。
+- `proxy_request_buffering off`：上传类路由的流式代理关键配置。
+- `Access-Control-*`：浏览器跨域访问所需 CORS header。
+
+## 常见误判与排障顺序
+
+- 误判：OpenResty 直接知道所有后端 gRPC 服务。正确理解：OpenResty 只动态发现 `gateway_srv`，`account_srv/file_srv/AI_srv` 仍由 Drogon 继续发现。
+- 误判：OpenResty 做 JWT 鉴权。正确理解：它只透传 `Authorization`，鉴权在 Drogon filter。
+- 误判：上传卡顿一定是 Go 服务。正确理解：先查 `client_max_body_size`、buffering、proxy timeout 和 upstream。
+- 排障顺序：端口监听 -> Consul 是否有 `gateway_srv` passing 实例 -> `consul_services` 缓存是否刷新 -> location 命中 -> CORS/OPTIONS -> request id -> balancer 是否 set peer -> buffering -> Drogon 是否收到请求。
+
+## 阅读检查
+
+- 能说明为什么 OpenResty 不该承担业务鉴权（对比 `if ($request_method = OPTIONS) { return 204; }` 与 Drogon `jwt_decode` 的分工）。
+- 能指出 `X-Request-Id` 在什么位置生成、透传、回写，并能说出它在下游三个消费点（Drogon attributes / Go gRPC metadata / Kafka header）各在哪个文件。
+- 能解释大文件路由为什么需要 `proxy_request_buffering off`，以及它和 Drogon `enableRequestStream`、gRPC `UploadFile(stream)` 的关系。
+- 能区分两层 Consul 动态发现：OpenResty 查 `gateway_srv` 选 Gateway；Drogon 查 `account_srv/file_srv/AI_srv` 选 gRPC 服务。
+- 能说出 dev 模式（Vite proxy 直连 38080）与生产模式（OpenResty :2024）的两条不同请求路径，以及 `vite.config.ts` 中 `/clouddisk` 代理的用途。
+
+## 源码精读：OpenResty 入口职责
+
+### 1. `cloudisk_backend` 当前是动态 upstream
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+upstream cloudisk_backend {
+    server 127.0.0.1:38080;
+}
+```
+
+解释：
+
+- 这段代码把“转发到哪个 Gateway”从静态 `server` 选择改成 Lua 决策：`balancer.pick("gateway_srv")` 会优先使用 Consul 缓存中的健康 Gateway 实例。
+- `server 127.0.0.1:38080` 保留为 fallback：当 Consul 缓存还没初始化或本地开发只有一个 Gateway 时，请求仍能落到本机网关。
+- 因此现在可以说：OpenResty 已启用 Gateway 层动态 upstream，但它只动态发现 Gateway，不直接发现 Go gRPC 服务。
+
+### 2. `:2024` 是主应用入口
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+server {
+    listen 2024;
+    add_header Access-Control-Allow-Headers "Content-Type,Authorization,X-Requested-With,X-Request-Id" always;
+}
+```
+
+解释：
+
+- 浏览器访问主应用、用户接口、文件接口、AI 接口时，统一先到 `2024`。`Authorization` 被加入 CORS 允许头，说明前端携带 JWT 是被入口层显式支持的。
+- 该 server 块同时包含 `root .../static/dist`（静态 SPA）、`location /` 的 `try_files ... /index.html` 前端路由 fallback、以及 API 精确匹配 location——SPA 与 API 共用一个端口。
+
+### 3. Request ID 在 OpenResty 层生成并透传
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+access_by_lua_block {
+    -- 1 优先用上游传入的 X-Request-Id
+    ngx.req.set_header("X-Request-Id", rid)
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- `X-Request-Id` 是入口层统一 trace id。它不是业务字段，但后续 Drogon、gRPC metadata、Kafka headers 都可以借它串联日志（详见上文“Request ID”小节的消费链路）。
+- `access_by_lua_block` 是 nginx 请求处理早期阶段（access 阶段）的 Lua 钩子，整个 server 块的每个 location 都生效，因此无需在每个 location 重复配置。
+
+### 4. `/file/upload` 只是入口代理，不是业务实现
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+location = /file/upload {
+    proxy_pass http://cloudisk_backend;
+}
+```
+
+解释：
+
+- 这段代码说明上传请求仍然交给 Drogon。OpenResty 在这里关心的是 body 转发、buffering、超时、CORS，而不是文件 hash、用户归属、MinIO object key 或 DB 元数据。
+- 与网关侧对照：真正的上传实现是 `FileController::LoadFile`（HTTP stream -> gRPC stream）和 Go 侧 `UploadFile`（stream -> io.Pipe -> MinIO），入口层只是这两者的“第一跳”。
+
+### 5. `/file/uploadpart` 代理的是 gateway，不是直接打 MinIO
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+location = /file/uploadpart {
+    proxy_pass http://cloudisk_backend;
+}
+```
+
+解释：
+
+- 这和 `FileController::Uploadpart` 对上：浏览器把 `X-Presigned-Part-Url` 交给 Drogon，由 Drogon 再用 HTTP client 代理 PUT 到预签名 MinIO URL。OpenResty 没有解析预签名 URL，也没有直接完成 multipart part upload。
+- 换句话说，`uploadpart` 从入口看是“普通代理 + buffering off”，从网关看是“HTTP -> 预签名 URL 的二次转发”，两层都没有让前端直连 MinIO（直连只在 dev 模式经 Vite 的 `/clouddisk` 代理发生）。
+
+### 6. `:2025` 是静态预览/下载辅助入口
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+server {
+    listen 2025;
+    location /preview/ {
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- 这个配置暴露了一个本地路径耦合点：`alias` 是 WSL/Linux 路径。如果在 Windows 原生环境直接跑 OpenResty，路径不匹配会导致静态预览 404。
+- `:2025` 用 `Content-Disposition`（`inline`/`attachment`）区分预览与下载，和核心 file service 的预签名 URL 机制不是同一条路径——预签名下载走 `:2024` -> Drogon -> MinIO，静态预览直接读本地磁盘。
+
+### 7. 该章结论
+
+OpenResty 当前可以按四个职责理解：
+
+```text
+统一入口端口 -> CORS/OPTIONS -> Request ID -> Consul 缓存选择 Gateway -> 转发到 Drogon
+```
+
+没有源码证据显示它当前承担 JWT 解析、业务路由编排、gRPC 服务发现、DB/Redis/MinIO 操作。它现在承担的是第一跳 Gateway 动态发现；后续业务服务发现仍在 Drogon 层完成。

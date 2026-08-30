@@ -1,0 +1,375 @@
+# 12. Outbox、Kafka、Inbox、DLQ：异步一致性核心
+
+## 本章定位
+
+文件上传完成后，系统需要异步扫描。难点是：业务 DB 已提交后不能丢扫描事件；Kafka 事件重复到达时不能重复产生副作用；扫描一直失败时要留下可恢复证据。当前实现用 Outbox、Kafka、Inbox、DLQ 组合解决这个问题。
+
+总链路：`upsertFileAndRelation 写 Outbox -> OutboxDispatcher 投递 Kafka -> store_srv consumer -> tryBeginInbox 幂等 -> scan/finalize -> failed/retry/DLQ`。
+
+与"上传请求里直接调 Kafka"相比，这个链路多了一张 DB 表（Outbox）和两个后台组件（dispatcher、DLQ consumer）。理解本章的关键是三个"为什么"：为什么不在上传请求里同步发 Kafka（要保证 DB 与消息同事务，即 outbox 模式）；为什么消费端还要一张 Inbox 表（Kafka 只能做到至少一次投递，重复要靠业务侧去重）；为什么还有 DLQ（重试必须可控，不能把主队列无限堵住）。
+
+代码证据：`backword_part/model/filedb.go:40-51`
+
+```go
+const (
+	OutboxNew     OutboxStatus = "NEW"
+	OutboxSending OutboxStatus = "SENDING"
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+)
+```
+
+解释：
+
+- `OutboxStatus` 的四个状态就是 dispatcher 状态机的全部状态：NEW 待发送、SENDING 已抢占正在发送、SENT 已确认送达、FAILED 失败待退避重试。
+- `FileUploadEventTopic = "file.upload.cmd"` 是主题命名约定：`<业务>.<动作>.cmd`，命令型事件；DLQ 主题是主主题加 `.dlq` 后缀（见第 13 章 main.go），即 `file.upload.cmd.dlq`。
+- `FileScanRequested` 是上传完成后写入 outbox 的唯一事件类型，store service 也只认这一种（第 13 章）。
+- `LoadFile/DownLoadFile` 是历史遗留的事件名常量，当前上传链路不再使用。
+
+## 源码精读：Outbox 是 producer 侧一致性边界
+
+Outbox 表是 DB 与 Kafka 之间的一致性边界。上传接口在业务事务里创建 Outbox 行，事务提交后 dispatcher 才把行变成 Kafka 消息。这样"文件/用户文件落库"与"产生扫描事件"要么一起成功、要么一起失败，不会出现"DB 有文件但 Kafka 没消息"的丢事件窗口。
+
+代码证据：`backword_part/model/filedb.go:74-90`
+
+```go
+type Outbox struct {
+	gorm.Model
+	EventID     string       `gorm:"type:varchar(64);not null;uniqueIndex:uk_event_id;comment:事件唯一ID（幂等键）"`
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `EventID` 带唯一索引，是幂等键：它随 payload 一起进 Kafka，消费端 Inbox 用它去重（见下文 Inbox 节）。
+- `Topic/Key/Payload/Headers` 四个字段直接对应一条 Kafka ProducerMessage：Topic 是 `file.upload.cmd`，Key 用文件 hash，保证同一文件的事件落在同一分区、顺序消费。
+- `Status/RetryCount/NextRetryAt/LastError` 是 dispatcher 的重试状态：发送失败后按指数退避更新 NextRetryAt，dispatcher 到点再次捞取。
+- `LockedBy/LockedUntil` 是多实例抢占锁：谁抢到就把锁写给自己，租约期内其他实例跳过该行（见 claimBatch 节）。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:225-253`
+
+```go
+func enqueueScanRequested(ctx context.Context, tx *gorm.DB, file *model.File, userID string) error {
+	txID := uuid.NewString()
+	eventID := txID + ":SCAN_REQUESTED"
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 注意第一个参数是 `tx *gorm.DB`：Outbox 写入被放进上传业务的事务里，这就是 outbox 模式的核心——"业务修改"和"排队事件"同事务提交。
+- `eventID = txID + ":SCAN_REQUESTED"` 全局唯一；同一文件重复上传会生成新 txID、新 eventID，所以"重传同一文件"也会产生一条新的扫描事件。
+- `Key: file.Sha1` 让同一文件的事件路由到同一 Kafka 分区（消费端按文件串行处理，见第 13 章）。
+- `Headers` 由 `marshalOutboxHeaders`（同文件 216-223 行）携带 `x-request-id`，实现从 HTTP 请求到 Kafka 消费日志的链路追踪。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:404-419`（upsertFileAndRelation 事务收尾）
+
+```go
+		if err := ensureUserFile(tx, account.ID, file.ID, fileName); err != nil {
+			return err
+		}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `upsertFileAndRelation` 是上传落库的总入口：新建 File、恢复软删记录、补齐元数据、建 UserFile 关系，全部在同一个事务里，最后按需入队扫描事件。
+- `shouldEnqueue` 不是恒为 true：文件已是 `pending_scan/success`（对象已在扫描或已通过）时只补 user_files 关系、不重复投递；`infected` 直接报错拦截；`scan_failed` 会重置为 pending_scan 并重新投递（requeueScan 逻辑）。
+- 这段代码回答了"什么时候会产生一条新扫描事件"：新文件、文件从软删恢复、scan_failed 后重传、历史脏数据回填。
+
+## 源码精读：Dispatcher 轮询并分发 worker
+
+OutboxDispatcher 是 file_srv 内的后台组件，main 启动时 `go dispatcher.Start(ctx)` 常驻运行。它由两部分组成：一个 poller 每隔 2 秒查一次 outbox 表，8 个 worker goroutine 并发执行真正的 Kafka 发送。Kafka 投递不在上传请求里同步完成——上传请求只负责写 outbox 行、返回客户端；发送是后台补偿动作。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:19-42`
+
+```go
+type OutboxDispatcher struct {
+	db           *gorm.DB
+	producer     sarama.SyncProducer
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `instanceID = hostname-pid`：多实例部署时每个 dispatcher 有唯一身份，写进 Outbox.LockedBy，避免 A 实例释放 B 实例的锁。
+- 四个调参点：pollInterval 轮询间隔 2s、batchSize 每批最多抢 50 条、workerCount 8 个并发发送 goroutine、lockTTL 抢占锁租约 30s。
+- `producer` 是 sarama SyncProducer（`internal.KafkaProducer` 全局单例，见第 06 章）：同步发送、等待 broker ack，保证"先发成功、再改 DB"的顺序。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:45-86`
+
+```go
+func (d *OutboxDispatcher) Start(ctx context.Context) {
+	jobs := make(chan model.Outbox, d.batchSize*2)
+	var wg sync.WaitGroup
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 生产者-消费者模型：poller 是 producer，把 claim 到的 Outbox 塞进带缓冲的 `jobs` channel（容量 batchSize*2）；worker 是 consumer，从 channel 取一条发一条。
+- 优雅退出：`ctx.Done()` 时 close(jobs) 并 wg.Wait() 等全部 worker 收尾，进程重启不丢已抢占的消息（SENDING 行重启后仍可被标记失败/重试，见下节说明）。
+- 每轮 tick 只 claim 一次；worker 空闲时阻塞在 channel 上等待，不会空转。
+
+代码证据：`backword_part/file_server/file_srv/main.go:84-87`（dispatcher 启动位置）
+
+```go
+	// ---- 4. 开启kafka消费者-----
+	internal.InitKafkaProducer()
+	dispatcher := NewOutboxDispatcher(internal.DB, internal.KafkaProducer)
+	go dispatcher.Start(ctx)
+	internal.Logger.Info("kafka producer is running")
+```
+
+解释：
+
+- dispatcher 与 gRPC 服务同进程：上传 RPC 写 outbox，同一进程的 dispatcher 把它发出去。
+- 即使这个进程崩溃，outbox 行还在 DB 里（NEW 或 SENDING）；重启后或另一个实例的 dispatcher 会继续投递——这是 outbox 模式相对内存队列的最大优势：进程死亡不丢事件。
+
+## 源码精读：claimBatch 用 DB 锁支持多实例
+
+claimBatch 是 dispatcher 的抢占逻辑：找出所有可发送（NEW/FAILED 且已到退避时间、锁已过期）的记录，用 `FOR UPDATE SKIP LOCKED` 锁定，并在同一事务里批量置为 SENDING。SKIP LOCKED 是关键：多个 file_srv 实例同时跑 dispatcher 时，每行只被一个实例锁住，其他实例直接跳过该行而不是阻塞等待，从而让 outbox dispatcher 可以横向扩展。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:113-165`
+
+```go
+// claimBatch 抢占一批可发送的 outbox：将 NEW/FAILED 且 next_retry_at<=now 的记录置为 SENDING 并上锁
+func (d *OutboxDispatcher) claimBatch(ctx context.Context) ([]model.Outbox, error) {
+	now := time.Now()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- WHERE 条件三层过滤：`status IN (NEW, FAILED)` 只抢可发送行；`next_retry_at <= now` 尊重退避时间；`(locked_until IS NULL OR locked_until < now)` 只抢从未被锁或锁已过期的行。
+- `SELECT ... FOR UPDATE SKIP LOCKED` 与"UPDATE 置 SENDING"在同一个事务里完成，"抢占"与"上锁"原子生效，另一实例的 SELECT 在同一行上要么拿到锁要么直接跳过。
+- 锁租约 30s 只保护"正在发送中"的行不被并发抢走；`markSent/markFailed` 的 WHERE 还带 `locked_by = d.instanceID`，只有锁持有者能推进状态（见下节）。
+- 已知边界：如果实例在 markSent/markFailed 之前崩溃，记录会停留在 SENDING，而 claimBatch 只捞 NEW/FAILED，没有把超时 SENDING 拉回 NEW 的恢复逻辑——outbox 保证"进程死亡不丢 NEW 事件"，但 SENDING 崩溃窗口需要人工/运维介入。这也是阅读检查的重点之一。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:197-237`（markSent、markFailed、backoff）
+
+```go
+func (d *OutboxDispatcher) markSent(ctx context.Context, id uint) error {
+	now := time.Now()
+	return d.db.WithContext(ctx).Model(&model.Outbox{}).
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- markSent 把行收尾为 SENT 并清空锁和错误信息；markFailed 保留失败现场，`next_retry_at = now + backoff(retry+1)` 交给下一轮 claim。
+- `backoff` 是指数退避：第 n 次失败等待 `1s << n`，上限 5 分钟，`1<<min(n, 10)` 防止位移溢出。
+- 两者的 WHERE 都要求 `status=SENDING AND locked_by=自己`：状态机只能由当前锁持有者推进，这是多实例安全的最后一环。
+
+## 源码精读：Kafka send 成功后无法靠 DB 回滚
+
+sendOne 把 Outbox 行变成真正的 Kafka 消息。这里的失败模型决定了整个系统的边界：Kafka send 与 DB markSent 是两次独立操作，不可能原子。如果 Kafka 已收到消息但 markSent 失败，outbox 未来可能再次发送同一 event（重复）；如果 Kafka 没收到但 markFailed 也失败，消息会滞留在 SENDING。既然 producer 侧无法保证 exactly-once，consumer 侧就必须幂等——这就是 Inbox 存在的原因。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:167-195`
+
+```go
+func (d *OutboxDispatcher) sendOne(ctx context.Context, ob *model.Outbox) error {
+	if d.producer == nil {
+		return fmt.Errorf("[sendOne]kafka producer not initialized")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `ProducerMessage{Topic, Value, Key}` 全部来自 outbox 行：Topic=file.upload.cmd、Value=payload JSON、Key=文件 hash。
+- Headers 反序列化后变成 Kafka RecordHeader，把 `x-request-id` 等链路上下文带到消费端（第 13 章 extractKafkaRequestID 读取它）。
+- 使用 SyncProducer：SendMessage 同步等待 broker 响应，成功才返回。同步发送是"先发 Kafka 再改 DB"顺序的前提——markSent 一定发生在消息确认之后。
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:88-111`（workerLoop 与两难）
+
+```go
+func (d *OutboxDispatcher) workerLoop(ctx context.Context, jobs <-chan model.Outbox) {
+	for {
+		select {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 正常路径：`sendOne 成功 -> markSent`。失败路径：`sendOne 失败 -> markFailed`（退避后下轮重试）。
+- 源码注释和日志都点明了边界：markSent 失败时消息 "already sent"，无法回滚 Kafka，只能依赖消费端幂等（Inbox）兜底。
+- 失败语义的微妙之处：sendOne 报错（如网络超时）时消息可能没到、也可能到了 broker 但 ack 丢失，重发同样可能产生重复——所以"宁可重复，不可丢失"，重复由消费端去重。
+
+## 源码精读：Inbox 是 consumer 侧幂等门禁
+
+Inbox 表是消费端的"处理登记表"，主键就是 event_id。消费者处理一条消息前先 tryBeginInbox：能插入记录 = 第一次处理，拿到独占权；记录已 DONE = 直接跳过；记录被其他实例 PROCESSING = 放弃（等退避后重试）；记录 DLQ = 默认跳过，只有 DLQ 消费者重放时允许再处理。这样即使 Kafka 重复投递、多个 consumer 同时抢同一事件，最终副作用也只执行一次。
+
+代码证据：`backword_part/model/filedb.go:92-111`
+
+```go
+type InboxStatus string
+
+const (
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `EventID` 是主键：唯一索引让并发 INSERT 只有一个成功（另一个撞 Duplicate entry），这是幂等抢占的根基。
+- 状态只有三个：PROCESSING/DONE/DLQ。没有"失败重试"状态——重试期间记录停留在 PROCESSING，由同一实例续锁。
+- `LockedBy/LockedUntil` 与 Outbox 同款租约锁；`DLQFailureID` 把 Inbox 记录与 DLQ 失败记录关联起来，方便从 Inbox 直接跳到排障详情。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:441-465`（tryBeginInbox：首试与 DONE 判定）
+
+```go
+func (c *FileUploadConsumer) tryBeginInbox(ctx context.Context, eventID string, allowDLQRetry bool) (acquired bool, done bool, err error) {
+	now := time.Now()
+	lockUntil := now.Add(2 * time.Minute)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- 第一次遇到该 event：INSERT 成功即返回 `acquired=true, done=false`——"我先拿到处理权"。
+- INSERT 撞唯一键（isDupKey 匹配 "Duplicate entry"/"Error 1062"，同文件 534-540 行）说明已有记录：查出已有行再按状态分派。
+- `existing.Status == InboxDone` 直接返回 `done=true`：这就是"消息重复到达时跳过"的落点，最终副作用绝不执行第二次。
+- `lockUntil = now + 2min`：一次扫描的租约 2 分钟；租约过期后其他实例可以接管（见下一个证据块）。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:466-519`（tryBeginInbox：DLQ 重放、续锁、抢过期锁）
+
+```go
+	if existing.Status == model.InboxDLQ {
+		if !allowDLQRetry {
+			return false, true, nil
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- DLQ 分支：主消费者（allowDLQRetry=false）遇到 DLQ 记录直接当 done 跳过，避免与 DLQ 消费者重复处理同一事件；DLQ 消费者（allowDLQRetry=true）把状态从 DLQ 拉回 PROCESSING 重新处理（第 13 章 DLQ 消费者通过 processDLQMessage 进入）。
+- 续锁分支：同实例重试时（第 13 章 processMessageWithRetry 的重试循环）只刷新租约和 Attempts，不重新抢锁——重试仍是同一处理者的连续处理。
+- 兜底分支：锁已过期（其他实例崩溃留下的 PROCESSING 记录）可以被任何实例抢回；`status <> DONE` 保证已完成的永不再处理。
+- 返回 `acquired=false, done=false` 表示"没抢到"：外层返回 ErrInboxLocked，消费者退避后重试这条消息且不提交 offset（见第 13 章 ConsumeClaim）。
+
+## 源码精读：DLQ 是失败可恢复证据
+
+当一条消息耗尽重试次数仍失败（或错误不可重试）时，它进入死信链路：Kafka 侧投递到 `file.upload.cmd.dlq` topic，MySQL 侧落一条 dlq_failures 记录，Inbox 标记为 DLQ。DLQ 不是成功路径，也不是简单日志：它保存"哪个事件、什么 payload、失败原因、尝试次数"，并由低频率的 DLQ 消费者负责重放和收敛。
+
+代码证据：`backword_part/model/dlq.go:10-15, 18-50`
+
+```go
+const (
+	DLQStatusPending  DLQStatus = "pending"  // 待处理
+	DLQStatusRetrying DLQStatus = "retrying" // 重试中
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 与"打完日志就忘掉"不同，这里失败证据是持久化的：`OriginalValue` 存原始 Kafka 消息全文（mediumblob），`ErrorStack` 存故障时刻堆栈，任何人/任何工具都能事后完整重建现场。
+- `Topic/Partition/Offset` 记录消息在原始主题上的位置，重放时按此重建 sarama.ConsumerMessage（见下文 DLQ 消费者）。
+- `ErrorCategory`（retryable/non_retryable/unknown）由第 13 章 retry.go 的 `CategorizeError` 产生，是重放策略的依据。
+- `Status` 四态 pending/retrying/failed/resolved 由 DLQ 消费者驱动；`ResolvedAt/ResolvedBy/Resolution` 记录"谁、何时、怎么解决的"。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:174-189`（handleTerminalFailure：进 DLQ 前先标记 scan_failed）
+
+```go
+func (c *FileUploadConsumer) handleTerminalFailure(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) error {
+	if markErr := c.markMessageScanFailed(ctx, msg, err.Error()); markErr != nil {
+		internal.Logger.Error("[FileUploadConsumer]mark scan_failed failed",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- 失败收敛顺序：先把 File 标记为 scan_failed（"未能确认安全"，见第 13 章），再投 DLQ。这样即使 DLQ 投递本身失败，业务状态也已经落库。
+- `SendToDLQ` 成功即返回 nil，外层 processMessageWithRetry 会提交 offset——DLQ 收敛后不阻塞主队列。
+- 如果 DLQ 也失败（Kafka 不可用），函数还有 fallback：buildDLQMessage + persistToDB 直接把失败记录写进 MySQL（同函数 191-211 行），保证失败证据不丢。
+
+代码证据：`other_srv/store_srv/kafka/dlq_producer.go:151-207`（persistToDB：DLQ 记录与 Inbox 联动同事务）
+
+```go
+// persistToDB 持久化 DLQ 消息到数据库（事务中同时更新 Inbox）
+func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error {
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 同一事务里做两件事：创建 DLQFailure（status=pending）＋ 把对应 Inbox 置为 DLQ 并写入 `dlq_failure_id` 关联。DLQ 记录或 Inbox 标记要么一起成功、要么一起回滚。
+- Inbox 置 DLQ 同时释放锁（locked_by 清空、locked_until 置空），意味着该事件进入"由 DLQ 链路接管"的状态，普通主消费者不再碰它（tryBeginInbox 的 allowDLQRetry=false 分支）。
+- 注意与第 12 章 outbox 侧不同：这里 Inbox 更新失败只记 Warn 不返回错误——DLQ 记录已创建是优先保证的，Inbox 标记允许事后通过 dlq_failure_id 对账。
+
+代码证据：`other_srv/store_srv/kafka/dlq_consumer.go:130-148, 157-169`（DLQ 消费者：收敛与重放）
+
+```go
+func (d *DLQConsumer) processFailure(failure *model.DLQFailure) {
+	d.logger.Info("[DLQConsumer]Processing DLQ failure",
+		zap.Uint("id", failure.ID),
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	err := d.processor.processDLQMessage(ctx, msg)
+```
+
+解释：
+
+- `checkFileAlreadyInOSS`（同文件 218-252 行）先查 File 是否已到终态（success/infected）：已到终态说明主链路其实已经收敛，DLQ 记录直接 resolved，不再重放——这是"去重"在 DLQ 层的又一体现。
+- 未收敛才把状态置为 retrying，并用 `OriginalValue` 重建 sarama.ConsumerMessage，交给主消费者的 `processDLQMessage` 重新处理（allowDLQRetry=true，Inbox 从 DLQ 拉回 PROCESSING）。
+- 重放成功 → markResolved（"Auto-recovered by DLQ consumer"）并同步把 Inbox 置 DONE；重放失败 → FailureCount+1，超过 DLQ MaxRetries（默认 1，见 dlq_consumer.go:23-29）则 markFailed 并告警，否则回到 pending 等下一轮（5 分钟一次轮询）。
+- DLQ 消费者是低频恢复器而不是高吞吐消费者：它不阻塞主队列，也不追求即时重放，符合"死信是例外路径"的定位。
+
+## 状态转换
+
+Outbox、Inbox、DLQ 是三套状态机，分别覆盖生产端、消费端和失败恢复端。
+
+```text
+Outbox: new -> sending -> sent
+Outbox: new/failed -> sending -> failed -> next_retry_at 到期后再次 sending
+```
+
+```text
+Inbox: absent -> processing/locked -> done
+Inbox: processing -> failed/expired lock -> retry/reacquire
+Inbox: done -> duplicate event arrived -> skip
+```
+
+```text
+DLQ: terminal failure -> dlq pending -> retry/replay -> resolved 或继续 failed
+```
+
+关键结论：系统是“至少一次投递 + consumer 幂等 + DLQ 可恢复”，不是 exactly once。Kafka send 成功但 `markSent` 失败时，重复消息是允许发生的；`tryBeginInbox(event_id)` 才是防重复副作用的核心。
+
+## 关键数据结构 / 字段
+
+- `Outbox.event_id`：跨 Kafka 和 Inbox 的幂等键。
+- `Outbox.status / retry_count / next_retry_at / locked_by`：生产端投递状态和并发抢占控制。
+- `FileEventPayload.oss_key / sha1 / file_id`：store service 找对象和更新文件状态的依据。
+- `Inbox.event_id / status / locked_by / locked_until`：消费端幂等与并发处理锁。
+- `DLQFailure.payload / error_message / retry_count / status`：失败恢复所需证据。
+
+## 常见误判与排障顺序
+
+- 误判：写 DB 后直接发 Kafka 就够了。正确理解：进程可能在两步之间崩溃，所以需要 Outbox。
+- 误判：Kafka 发送成功就一定不会重复。正确理解：`markSent` 失败会导致 Outbox 重发，重复由 Inbox 吸收。
+- 误判：DLQ 是普通错误日志。正确理解：DLQ 是可重放/可恢复的失败事件记录。
+- 排障顺序：File/UserFile 是否落库 -> Outbox 是否 new/failed/sent -> Kafka 是否收到 -> Inbox 是否 processing/done -> File.status 是否 finalize -> DLQ 是否有 terminal failure。
+
+## 阅读检查
+
+- 能说明 Outbox 解决 producer 侧不丢事件，Inbox 解决 consumer 侧重复事件。
+- 能解释为什么 Kafka send 和 markSent 不是原子操作，以及这个两难如何决定 consumer 必须幂等。
+- 能定位 `OutboxDispatcher.Start/claimBatch/sendOne/markSent/markFailed` 和 `tryBeginInbox`。
+- 能说清 DLQ 与普通错误日志的区别（持久化原始消息 + 堆栈 + 状态机 + 自动重放）。
+- 能复述 claimBatch 的 WHERE 三要素（status、next_retry_at、locked_until）和 SKIP LOCKED 的意义。
+- 能说明 tryBeginInbox 对 PROCESSING/DONE/DLQ/锁过期四种情况各自返回什么。
+- 能说出"实例在 SENDING 状态崩溃"时 outbox 行为如何（记录停留在 SENDING，无自动恢复），并思考可能的修复方案。
+- 能画出三张表的状态流转：Outbox NEW→SENDING→SENT/FAILED；Inbox 无→PROCESSING→DONE/DLQ；DLQFailure pending→retrying→resolved/failed。

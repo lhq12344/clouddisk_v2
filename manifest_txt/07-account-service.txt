@@ -1,0 +1,301 @@
+# 07. 账号服务：注册、邮箱验证、登录、用户信息
+
+## 本章定位
+
+`account_srv` 是账号领域服务。Drogon 负责 HTTP/gRPC 转换，账号服务负责真正的用户查询、密码校验、注册 pending 状态、验证码确认和 JWT 生成。
+
+## 总链路
+
+```text
+注册：AuthPage signup -> account_srv.Signup -> Redis pending user -> send code -> VerifyCode -> MySQL Account created
+登录：AuthPage signin -> account_srv.Signin -> password check -> JWT generated -> frontend localStorage
+用户信息：ApiService.userinfo -> Gateway JWT 身份 -> account_srv.Userinfo -> Account/Profile JSON
+```
+
+账号服务的核心不是 HTTP 页面，而是用户身份状态从“待验证”到“可登录”的推进。
+
+服务对外暴露 4 个 gRPC 方法，全部走统一响应 `Resp{Code, Message}`；proto 定义在 `proto/account_srv/account.proto`。
+
+代码证据：`proto/account_srv/account.proto`
+
+```proto
+service accountService {
+  rpc Signin(ReqSignin) returns (Resp) {}
+  rpc Signup(ReqSignup) returns (Resp) {}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 四个 RPC 全部是一元调用（非 stream），响应类型统一是 `Resp`（`account.proto:12-15` 的 `{int32 code, string message}`）。
+- 业务状态通过 `code` 区分：`0` 成功，非 0 是业务错误；`message` 既是错误文案，也是"登录 token""用户信息 JSON"这类业务数据的载体 —— 这是本项目最需要警惕的设计（见"登录链路"和"用户信息"小节）。
+- 实现侧 `AccountServer` 结构体（`backword_part/account_server/account_srv/protobuf/account.go:27-29`）只嵌入 `UnimplementedAccountServiceServer` 占位，四个 RPC 方法都在同一个文件里。
+
+## 核心数据结构
+
+`backword_part/model/accountdb.go` 定义 `Account`，即 `accounts` 表的 GORM 模型：
+
+| 字段 | 含义 |
+| --- | --- |
+| `gorm.Model` | ID、CreatedAt、UpdatedAt、DeletedAt |
+| `Name` | 用户名，唯一索引，登录和查重使用 |
+| `Password` | 密码 hash，不应理解为明文 |
+| `Salt` | 密码 hash 的盐 |
+| `Email` | 邮箱，唯一索引，注册 pending 的键 |
+| `Mobile` / `Nickname` / `Gender` / `Role` | 其他用户信息字段 |
+
+代码证据：`backword_part/model/accountdb.go`
+
+```go
+type Account struct {
+    gorm.Model
+    Mobile   string `gorm:"type:varchar(11);not null;index:idx_mobile"`
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `Name` 和 `Email` 是 `uniqueIndex` 唯一索引：用户名查重、邮箱查重都由数据库兜底，但注册查重是应用层先做（见"注册链路"）。
+- `Password` 保存的是 hash 结果（`varchar(64)`），`Salt` 是生成 hash 用的盐 —— 两者配合 `password.Encode`/`password.Verify`，任何地方都不出现明文密码。
+- `Role` 默认 `1`（普通用户），`2` 是管理员，目前接口层没有角色控制逻辑，只是预留字段。
+- 建表由 `internal/db.go` 的 `AutoMigrate` 逐表完成（见 06 章），模型改动后重启服务即可自动加列，不需要手工 SQL。
+
+## 注册链路
+
+`AccountServer.Signup` 做用户名查重、生成 salt/hash，并把待注册信息写入 Redis pending 状态，而不是立即创建正式账号。这样验证码未确认前不会污染账号表。
+
+代码证据：`backword_part/account_server/account_srv/protobuf/account.go`（`Signup`，`:67`）
+
+```go
+func (a *AccountServer) Signup(ctx context.Context, signup *ReqSignup) (*Resp, error) {
+    l := internal.LoggerWithRID(ctx, internal.Logger)
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 第一步查重（`:70-75`）：`internal.DB.Where(&model.Account{Name: ...}).First(...)`，`RowsAffected == 1` 说明用户名已存在，返回业务码 `1` + `custom_error.AccountExists`（"账户已存在"，`custom_error.go:5`）。
+- 密码处理（`:77-83`）：`password.Encode` 用 `SaltLen=16`、`Iterations=100`、`KeyLen=32`、`md5` 做迭代 hash，返回 `(salt, encodedPwd)` 两个值分别入库字段。
+- 待注册信息（`:85-91`）：把 username/email/salt/password 打成 JSON 字符串 —— 注意这是**加盐 hash 后的密码**，不是明文。
+- pending 键（`:93-98`）：`pending_reg:<email>`，TTL 10 分钟，过期自动清理。这里用邮箱而不是用户名做键，因为后面验证码确认也是按邮箱定位。
+- 返回 `Model2Pb(0, "PENDING VERIFICATION")`（`:103`）：注册接口"成功"不代表账号已建，只是"待验证" —— 前端据此进入验证码环节。
+- 全程使用 `internal.LoggerWithRID`（`:68`）打点，request id 来自 06 章的拦截器。
+- 错误码常量集中在 `backword_part/account_server/custom_error/custom_error.go`（`AccountNotFound`/`AccountExists`/`PasswordError`/`TokenError` 等），所有返回码与文案一一对应。
+
+## 邮箱验证码链路
+
+验证码链路跨三个进程：gateway（`sendcode` 发任务）→ C++ `email_srv`（生成验证码、写 Redis、发邮件）→ gateway（`verifycode` 校验）→ `account_srv`（`VerifyCode` 落库）。与注册 pending 并存的是两套 Redis 数据：`pending_reg:<email>`（账号服务写，注册待确认数据）和 `email:<email>`（email_srv 写，验证码本体）。
+
+第一步，gateway 的 `AccountController::sendcode` 只做一件事：把邮箱地址塞进 Kafka `email_verify` 主题，交给 email_srv。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc`（`sendcode`，`:425`）
+
+```cpp
+std::string host = MyAppData::instance().kafkaHost;
+int port = MyAppData::instance().kafkaPort;
+if (!KafkaProducer::instance().init(host + ":" + std::to_string(port)))
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+callback(resp);
+```
+
+解释：
+
+- Kafka 地址来自 gateway 自己的全局配置 `MyAppData::instance().kafkaHost/kafkaPort`（`:443-444`），与 Go 侧 Nacos 配置相互独立。
+- topic 固定 `"email_verify"`（`:450`），消息体就是邮箱字符串本身（`:451`）—— 生成什么验证码不是 gateway 的职责。
+- 路由注册在 `AccountController.h:32`：`ADD_METHOD_TO(AccountController::sendcode, "/user/sendcode", Post);`，注意它**没有**挂 `jwt_decode`（发验证码时用户还没有账号/token）。
+
+第二步，C++ `email_srv` 消费 `email_verify` 主题：防重复、生成 6 位验证码、写入 Redis（键就是邮箱）、通过 SMTP 发邮件。它自带线程池 + Redis 连接池，Kafka 消费线程只做入队。
+
+代码证据：`other_srv/email_srv/main.cpp`
+
+```cpp
+EmailService emailSvc(AppConfig::getInstance());
+KafkaConsumer consumer(AppConfig::getInstance().kafka, emailSvc);
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+consumer.loop();
+```
+
+代码证据：`other_srv/email_srv/emailServer.h`（`handleTask`，`:92`）
+
+```cpp
+// 1. 防重复：email_dedup:{email} 60秒内只能发一次
+string dedupKey = "email_dedup:" + email;
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+bool ok = sender_.sendEmail(email, subject, body, false);
+```
+
+解释：
+
+- `main.cpp`（`:22-27`）把 `EmailService` 注入 `KafkaConsumer`；`KafkaConsumer.h:71-118` 的 `loop()` 用 `rd_kafka_consumer_poll` 拉消息，收到邮箱字符串后构造 `EmailTask` 交给 `emailSvc_.enqueue`。
+- 防重复（`:98-120`）：`SET email_dedup:<email> 1 NX EX <ttl>` 原子加锁，TTL 内重复请求直接跳过 —— 防止刷验证码轰炸邮箱。
+- 验证码生成（`:123-133`）：`gen_code()`（`:17-26`）用 `std::mt19937` 生成 0~999999 随机数并格式化为 6 位零填充字符串；`SET <email> <code> EX <ttl>` 写入 Redis，**键就是邮箱地址本身**。
+- 发信（`:137-142`）：SMTP 发送，邮件正文带验证码和有效期；发送失败只打 stderr 日志，不重试、不影响 Kafka offset（当前实现）。
+
+第三步，用户把验证码提交给 gateway 的 `verifycode`：它直接从 Redis `GET <email>` 对比验证码，通过后前端再调注册确认（即 `VerifyCode` RPC）。注意验证码校验发生在 **gateway 层**，Go 账号服务不校验 code。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc`（`verifycode`，`:461`）
+
+```cpp
+redisClient->execCommandAsync(
+    [code, callback](const drogon::nosql::RedisResult &r)
+    {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    "get %s", email.c_str());
+```
+
+解释：
+
+- 校验就是一条 `GET <email>`（`:526`），与 email_srv 写入的键一致；`kNil` 说明验证码不存在或已过期。
+- 校验通过后 gateway 返回 `ok`，前端接着调用注册确认接口（`VerifyCode` RPC）；整个链路中 code 只存在于 gateway ↔ Redis 之间。
+- 路由在 `AccountController.h:33`：`ADD_METHOD_TO(AccountController::verifycode, "/user/code", Post);`，同样不挂 `jwt_decode`。
+
+第四步，`AccountServer.VerifyCode` 读取 `pending_reg:<email>`，把临时注册数据落成正式 `Account` 行，然后删除 pending 键。这是账号生命周期的转换点：Redis pending -> MySQL Account。
+
+代码证据：`backword_part/account_server/account_srv/protobuf/account.go`（`VerifyCode`，`:106`）
+
+```go
+func (a *AccountServer) VerifyCode(ctx context.Context, req *Reqverifycode) (*Resp, error) {
+    l := internal.LoggerWithRID(ctx, internal.Logger)
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 按 `req.Email` 拼出 `pending_reg:<email>`（`:109`）读注册时存的 JSON —— `Reqverifycode` 里其实有 `code` 字段（`account.proto:23-26`），但 Go 实现只使用 `email`，验证码校验完全在 gateway 层完成。
+- `Get` 失败（`:111-114`）说明 10 分钟 TTL 过期或从未注册，返回"请先注册"。
+- `json.Unmarshal` 还原 username/email/salt/password（`:116-120`），直接 `internal.DB.Create(&account)` 落库（`:122-128`）—— 此时 `Name/Email` 唯一索引兜底防并发重复注册。
+- 成功后 `internal.RedisClient.Del(pendingKey)`（`:134`）清理临时态：pending 是一次性的，重放（重复调用 `VerifyCode`）会因 `Get` 失败而拒绝。
+- 最终返回 `REGISTRATION COMPLETE`（`:139`）；前端此时才真正拥有账号，可以走登录。
+
+## 登录链路
+
+`Signin`：查账号 → salt/hash 校验密码 → 生成 JWT → 通过 `Resp.Message` 返回 token。注意它只读正式账号表，pending 注册态不参与登录。
+
+代码证据：`backword_part/account_server/account_srv/protobuf/account.go`（`Signin`，`:31`）
+
+```go
+func (a *AccountServer) Signin(ctx context.Context, signin *ReqSignin) (*Resp, error) {
+    l := internal.LoggerWithRID(ctx, internal.Logger)
+    var account model.Account
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 查账号（`:34-38`）：`RowsAffected == 0` 即"账户不存在"（业务码 `1`）；未完成邮箱验证的用户根本不在 `accounts` 表里，所以**不可能登录成功**。
+- 密码校验（`:45-49`）：`password.Verify(明文, account.Salt, account.Password, &options)`，参数与注册时的 `Encode` 完全一致（`SaltLen=16, Iterations=100, KeyLen=32, md5`），不匹配返回"密码错误"（业务码 `2`）。
+- 生成 token（`:50-58`）：claims 只放 `ID` 和 `Name`，有效期 24 小时，`Issuer: "Signin"` —— gateway 的 `jwt_decode` 用 issuer 校验合法性。
+- 返回方式（`:64`）：`Model2Pb(0, token)` —— **token 放在 `Resp.Message` 字段**里，这是本服务最典型的"业务数据塞 message"模式，前端/网关解析时要注意。
+
+JWT 生成本身由 `internal/jwt.go` 提供（06 章介绍过），`GetJWT` 用 `sync.Once` 懒加载签名 key，`GenerateToken` 用 HS256 签名。
+
+代码证据：`internal/jwt.go`
+
+```go
+func GetJWT() *JWT {
+    jwtOnce.Do(func() {
+        jwtInstance = &JWT{SigningKey: []byte(ViperConf.JWTConfig.SigningKey)}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 签名密钥来自 Nacos 配置 `jwt.signing_key`（`internal/jwt.go:37`），gateway 侧必须配置同一个 key（C++ `config.json` 的 `SigningKey`）才能解码，否则 `jwt_decode` 全部失败。
+- `Signin` 之后，gateway 的 `signin` 回调还会把 token 写入 Redis 白名单（`AccountController.cc:301-340`，`addTokenToWhitelist` 用 `ZADD/ZCARD/ZPOPMIN` 维护每人最多 2 个有效 token），这部分属于 04 章认证体系，这里只提醒登录链路不止"签发"一步。
+
+## 用户信息
+
+`Userinfo` 根据用户 ID 查询账号并返回 JSON 字符串。HTTP 层 `/user/info` 挂 `jwt_decode` filter，所以 ID 来源是 token 注入的 attributes，而不是前端自报可信身份。
+
+代码证据：`backword_part/account_server/account_srv/protobuf/account.go`（`Userinfo`，`:142`）
+
+```go
+func (c *AccountServer) Userinfo(ctx context.Context, Userinfo *ReqUserinfo) (*Resp, error) {
+    l := internal.LoggerWithRID(ctx, internal.Logger)
+    var account model.Account
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 按主键 `id = ?` 查询（`:145`），查不到返回"账户异常"（业务码 `1`）。
+- 响应（`:150-159`）：把 `CreatedAt/UpdatedAt/Name/Email/Gender/Mobile` 手动拼成 JSON **字符串**放进 `Resp.Message` —— 不是 proto 结构化字段。注意 `username`/`name` 和 `mobile`/`Mobile` 是重复键，是为了兼容不同消费端（gateway 解析时两边都查，见下）。
+- gateway 的 `userinfo` 回调拿到 message 后 `parseJsonString` 解析（`AccountController.cc:399-419`），再挑字段组装 HTTP JSON —— 所以读这条链路时"Resp.Message 是 JSON 字符串"是必须记住的事实。
+
+身份来源在 gateway 侧：`userinfo` 从 `req->getAttributes()` 读 `Name/ID`，这两个值由 `jwt_decode` filter 从 token 解析注入，而不是从请求体里拿。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc`（`userinfo`，`:343`）
+
+```cpp
+std::string name;
+int userId = 0;
+try
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+stub->async()->Userinfo(context.get(), request.get(), response.get(), ...);
+```
+
+代码证据：`forward_part/gateway/controllers/AccountController.h`
+
+```cpp
+METHOD_LIST_BEGIN
+ADD_METHOD_TO(AccountController::signup, "/user/signup", Post);
+ADD_METHOD_TO(AccountController::signin, "/user/signin", Post);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+METHOD_LIST_END
+```
+
+解释：
+
+- `/user/info` 是 `Get` 且挂了 `"jwt_decode"` filter（`AccountController.h:34`）：请求先经过 04 章讲的 JWT 校验，再把 `Name/ID` 写入 request attributes。
+- `userinfo` 读取 attributes 失败（`:369-378`）说明没有经过 filter 或 token 无效，直接 401 —— 业务层不信任前端传来的任何用户身份字段。
+- 对比注册/登录接口（`:30-33`）不挂 `jwt_decode`：那时还没有合法 token，是匿名路径。
+- `addToBlacklist`/`addToWhitelist`（`:35-36`）也挂 `jwt_decode`，它们和登录时的白名单写入共同构成 04 章的 token 状态管理。
+
+## 状态转换
+
+```text
+未注册 -> Signup -> Redis pending registration
+pending registration -> SendCode/VerifyCode 成功 -> Account(MySQL) created
+Account created -> Signin 密码校验成功 -> JWT issued
+JWT issued -> 前端保存 token -> 后续请求带 Authorization
+密码错误 / 用户不存在 -> Signin 返回失败 -> 不签发 JWT
+```
+
+注册和登录要分开理解：Signup 不直接生成登录态，VerifyCode 后才真正创建账号，Signin 后才进入 JWT 会话。
+
+## 关键数据结构 / 字段
+
+- `Account.ID / Username / Password / Email`：账号核心字段，登录和身份 claims 的来源。
+- `Redis pending registration`：注册待验证状态，验证码通过前不落正式账号。
+- `ReqSignin / ReqSignup / Reqverifycode / ReqUserinfo`：账号服务四类入口请求。
+- `Resp.Code / Resp.Message`：账号服务统一响应，JWT 或用户信息 JSON 也通过 Message 返回。
+- `JWT claims`：登录成功后跨 Gateway 和后端服务传递的身份载体。
+
+## 常见误判与排障顺序
+
+- 误判：Signup 成功等于账号已可登录。正确理解：还要 VerifyCode 创建正式 Account。
+- 误判：JWT 在 Gateway 生成。正确理解：JWT 由 account_srv.Signin 生成，Gateway 只校验。
+- 误判：Userinfo 直接相信前端 user_id。正确理解：应以鉴权链路传入的用户身份为准。
+- 排障顺序：Signup 参数 -> Redis pending -> 邮箱验证码 -> VerifyCode 落库 -> Signin 密码/JWT -> 前端 token 保存。
+
+## 阅读检查
+
+- 能解释为什么注册分 pending 和 verify 两步：未验证用户不落 `accounts` 表，`pending_reg:<email>`（TTL 10 分钟）是临时状态，`VerifyCode` 成功后才 `DB.Create` 并 `Del` pending。
+- 能指出 token 是账号服务生成（`Signin` 里 `GetJWT().GenerateToken`）、放在 `Resp.Message` 返回、前端保存、gateway `jwt_decode` 校验。
+- 能找到 account proto（`proto/account_srv/account.proto`）、account model（`backword_part/model/accountdb.go`）、account service 实现（`backword_part/account_server/account_srv/protobuf/account.go`）三者关系。
+- 能画出邮箱验证码全链路：`/user/sendcode` -> Kafka `email_verify` -> email_srv（`SET email:<addr> <code> EX` + SMTP）-> `/user/code`（gateway `GET` 对比）-> `VerifyCode` RPC 落库。
+- 能说明验证码本体存 Redis 的键就是邮箱地址，与注册 pending 的 `pending_reg:<email>` 是两套不同的 key。
+- 能指出 `Resp.Message` 的三种承载：错误文案、登录 token、用户信息 JSON 字符串 —— 解析响应的代码要按场景区分。
+- 能说明密码链路：`password.Encode`（SaltLen 16 / Iterations 100 / md5）生成 `Salt + hash` 存库，`password.Verify` 校验，全程无明文。
+- 能区分匿名路径（signup/signin/sendcode/verifycode 无 filter）与身份路径（userinfo 挂 `jwt_decode`，ID 来自 token 注入的 attributes）。

@@ -1,0 +1,374 @@
+# 09. 小文件上传：从 HTTP body 到 MinIO 和扫描队列
+
+## 本章定位
+
+小文件上传要按"数据面"和"控制面"一起读：文件字节从浏览器一路流到 MinIO，控制信息从 header/JWT 变成 gRPC meta，再变成 MySQL 元数据和 Outbox 扫描事件。最终用户能不能下载，不由上传接口决定，而由 store service 扫描后的 `File.status` 决定。
+
+总链路：`UploadManager -> ApiService.simpleUpload -> OpenResty /file/upload -> Drogon FileController.LoadFile -> file_srv.UploadFile(stream) -> MinIOUploadStream -> upsertFileAndRelation -> Outbox -> store_srv scan`。
+
+## 前端发起上传：文件即 body，元信息走 header
+
+`forward_part/static/services/api.ts:187` 的 `simpleUpload` 证明前端没有把文件包成 JSON：文件原始内容作为 body，文件名、hash、大小和 content type 走 header。
+
+代码证据：`forward_part/static/services/api.ts:187-198`
+
+```ts
+  async simpleUpload(file: Blob, filename: string, fileHash: string, contentType?: string): Promise<UploadResponse> {
+    return this.request('/file/upload', {
+      method: 'POST',
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  }
+```
+
+身份信息由统一的 `request()` 注入：JWT 走 `Authorization` header，另生成 `X-Request-Id` 贯穿全链路（`api.ts:64-77`）：
+
+代码证据：`forward_part/static/services/api.ts:64-77`
+
+```ts
+  private async request(endpoint: string, options: RequestInit = {}) {
+    const token = this.getToken();
+    const headers = new Headers(options.headers || {});
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    headers.set('X-Request-Id', requestId);
+```
+
+解释：
+
+- 文件内容是 HTTP body（`body: file`），不是 multipart form，也不是 JSON base64。
+- `fileHash` 是业务层内容身份（前端用 SHA-256 计算），不是 MinIO 返回值。
+- `X-File-Size` 用 `file.size.toString()`：服务端会拿它和实际收到的字节数对比（见下文 size mismatch 校验）。
+- 上传接口必须适配较大的 body/stream，不能按普通 JSON API 排障。
+- JWT 从 `localStorage('oss_token')` 取出注入 `Authorization`；`X-Request-Id` 由前端生成，OpenResty/Drogon/Go 全链路透传。
+
+## 前端任务调度：5MB 以下走小文件，以上走分片
+
+`forward_part/static/components/UploadManager.tsx:15` 定义了分界：`SIMPLE_UPLOAD_THRESHOLD = 5 * 1024 * 1024`。`processUpload`（`UploadManager.tsx:220`）先算 SHA-256，再按大小分流。
+
+代码证据：`forward_part/static/components/UploadManager.tsx:26-30`
+
+```ts
+const calculateHash = async (data: ArrayBuffer): Promise<string> => {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+```
+
+代码证据：`forward_part/static/components/UploadManager.tsx:220-239`
+
+```ts
+  const processUpload = async (file: File, taskId: string) => {
+    try {
+      updateTask(taskId, { status: 'uploading', detail: 'hashing' });
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  };
+```
+
+解释：
+
+- 阈值 5MB：小于走 `simpleUpload`（本章），大于等于走 `uploadMultipart`（第 11 章详读）。
+- 小文件也会先整个读进内存算 SHA-256——hash 是内容身份，上传链路和秒传都依赖它。
+- 服务器返回非 2xx 时，错误里可能带着 `uploadResponse`（含 `status/message`，如 `infected`），前端据此展示状态而不是一律报"上传失败"。
+- 计算 hash 期间任务状态是 `hashing`，说明上传前有一个可感知的等待阶段。
+
+## OpenResty 入口：只代理，不解析
+
+`forward_part/config/nginx/nginx.conf:139` 的 `/file/upload` location 把请求转给 Drogon gateway。OpenResty 负责入口职责（路由、CORS、request id、body 代理），不解析 JWT，不调用 gRPC，也不写 MinIO。
+
+代码证据：`forward_part/config/nginx/nginx.conf:139-146`
+
+```nginx
+		location = /file/upload {
+			proxy_pass http://cloudisk_backend;
+			proxy_set_header Host $host;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+		}
+```
+
+request id 由 `access_by_lua_block` 统一生成/透传（`nginx.conf:61-79`）：
+
+代码证据：`forward_part/config/nginx/nginx.conf:61-79`
+
+```nginx
+		access_by_lua_block {
+			-- 1 优先用上游传入的 X-Request-Id
+			local rid = ngx.var.http_x_request_id
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+			ngx.req.set_header("X-Request-Id", rid)
+```
+
+解释：
+
+- `proxy_request_buffering off` 是流式上传的关键：OpenResty 收到请求体后边收边转发，不等待整个 body 进内存。上传接口和 `/file/uploadpart`（`nginx.conf:176-183`）都有这个配置。
+- `upstream cloudisk_backend` 当前固定到 `127.0.0.1:38080`（`nginx.conf:40-43`），即 Drogon gateway；`lua/consul_service.lua`、`lua/balancer.lua` 只是存在但未接入该 upstream 的动态发现能力。
+- `client_max_body_size 128m`（`nginx.conf:48`）限制请求体上限——超过会直接 413，属于入口层限制。
+- `access_by_lua_block` 优先透传前端生成的 `X-Request-Id`，没有则现场拼一个；响应侧还会把 rid 写回 `X-Request-Id`（`nginx.conf:81-83`）。
+- 排障顺序：请求没到 Drogon → 查 OpenResty 路由/body 限制/CORS/upstream；已到 Drogon → 进入下面的 gRPC/MinIO 排查。
+
+## Drogon 网关：HTTP body 翻译成 gRPC stream
+
+`forward_part/gateway/controllers/FileController.cc:555` 的 `LoadFile` 是入口：从 JWT filter 注入的 request attributes 取用户身份，从 header 取文件元信息，校验后把 stream 交给 `UploadFileProxy`。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:555-598`
+
+```cpp
+void FileController::LoadFile(const HttpRequestPtr &req,
+							  RequestStreamPtr &&streamCtx,
+							  std::function<void(const HttpResponsePtr &)> &&callback) const
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`UploadFileProxy::run`（`FileController.cc:311`）在独立线程里做真正的协议翻译：先发第一帧 meta，再从缓冲区读 HTTP 分块写进 gRPC stream，最后 `WritesDone + Finish`。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:313-339`
+
+```cpp
+		grpc::ClientContext context;
+		if (!rid_.empty())
+		{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		}
+```
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:341-375`
+
+```cpp
+		for (;;)
+		{
+			std::string chunk;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		}
+```
+
+响应侧把 gRPC 返回的 `UploadFileResp` 映射回 JSON，`infected` 映射成 HTTP 409（`FileController.cc:386-400`）：
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:386-400`
+
+```cpp
+		writer->WritesDone();
+		const auto grpcStatus = writer->Finish();
+		if (!grpcStatus.ok())
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		respond(makeJsonResponse(ret, httpStatus));
+```
+
+解释：
+
+- `LoadFile` 自己不做协议转换，只做"取身份 + 取 header + 参数校验"，然后交给 `UploadFileProxy::Start`（`FileController.cc:198`）。
+- `UploadFileProxy` 用 `mutex + condition_variable + deque` 做生产者/消费者缓冲：`RequestStreamReader` 回调（`onData`，`FileController.cc:269`）把 HTTP 分块塞进 deque，`run()` 线程等队列或结束标记。
+- 第一帧一定是 meta（`user_id/file_name/file_hash/file_size/content_type`），后续每帧是 `data` 块——这和 Go 侧 `UploadFile` 的读取逻辑一一对应。
+- metadata 里带 `x-request-id` 和 `x-user-id`：Go 侧 `incomingUserID`（`file.go:143`）从 `x-user-id` 恢复用户身份做 owner 校验。
+- 业务状态与 HTTP 状态分离：`status == "infected"` 映射 409，其余成功 200；gRPC transport 错误才走 `grpcErrorResponse`。
+
+## Go 服务端：第一帧必须是 meta
+
+`backword_part/file_server/file_srv/protobuf/file.go:634` 的 `UploadFile` 是流式 RPC 的服务端。它明确要求第一帧是 meta，否则直接拒绝。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:634-653`
+
+```go
+func (s FileServer) UploadFile(stream FileService_UploadFileServer) error {
+	ctx := stream.Context()
+	l := internal.LoggerWithRID(ctx, internal.Logger)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- gRPC stream 的消息顺序是业务契约：没有第一帧 meta，服务端无法确定用户、文件名、大小、hash、content type，也无法构造 object key 或做 owner 校验。
+- meta 字段统一 `TrimSpace`；`ContentType` 为空时按文件名后缀探测 MIME（`detectMimeByName`，`file.go:100-111`），最后兜底 `application/octet-stream`。
+- 校验失败返回 `InvalidArgument`，客户端立刻知道是契约问题而不是存储问题。
+- 拿到 meta 后服务端先 `ensureAccount`（`file.go:132-141`）确认用户存在，再 `findFileByHash`（`file.go:421-431`）查是否已有同 hash 内容——这一步决定后面走"复用"还是"新上传"。
+
+## 数据面：io.Pipe 串起 gRPC stream 与 MinIO
+
+对象上传不是把整文件读进内存再 PUT。file service 用 `io.Pipe` 把 gRPC 收流和 MinIO PutObject 串起来（`file.go:688-705`）：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:688-705`
+
+```go
+	objectKey := buildObjectKey(meta.FileHash)
+	pipeReader, pipeWriter := io.Pipe()
+	uploadResultCh := make(chan uploadObjectResult, 1)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}()
+```
+
+主 goroutine 持续 `Recv` 并写入 `pipeWriter`，同时统计写入字节数（`file.go:707-736`）：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:707-736`
+
+```go
+	var written int64
+	for {
+		msg, recvErr := stream.Recv()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+`MinIOUploadStream` 是 internal 层对 `minio-go PutObject` 的封装（`internal/minio.go:107-125`）：
+
+代码证据：`internal/minio.go:107-125`
+
+```go
+func (c *MINIOClient) MinIOUploadStream(
+	ctx context.Context,
+	reader io.Reader,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `io.Pipe` 是同步管道：主 goroutine 写入多少，MinIO 后台 goroutine 就读走多少，内存里只滞留未消费的块，不整文件缓冲。
+- 错误传播方向：stream 中断 → `CloseWithError(recvErr)` 让 MinIO 侧 PutObject 立即失败；`pipeWriter.Write` 失败说明 MinIO 侧先挂了。
+- 每个出错分支都会 `<-uploadResultCh` 先收掉后台 goroutine 的结果，避免 goroutine 泄漏。
+- `written != meta.FileSize` 判定 size mismatch，返回 `InvalidArgument`——这与前端 header 里的 `X-File-Size` 是对应的契约。
+- 对象 key 是 `files/<hash>`（`buildObjectKey`，`file.go:57-59`），用户元数据 `x-file-name/x-file-hash/x-user-id` 会作为对象 metadata 存进 MinIO。
+
+## 控制面：落库与扫描事件是业务完成边界
+
+对象上传完成后，服务端调用 `upsertFileAndRelation` 写 `File/UserFile`，并在需要扫描时写 Outbox（`file.go:748-768`）：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:748-768`
+
+```go
+	file, _, err := upsertFileAndRelation(ctx, account, meta.UserId, meta.FileName, meta.FileHash, meta.ContentType, objectKey, meta.FileSize, false)
+	if err != nil {
+		_ = internal.MinIOClient.MinIODeleteObject(objectKey)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	})
+```
+
+响应返回的 `Status` 可能是 `pending_scan`。前端拿到后并不会把任务标成终态，而是每 3 秒轮询文件列表，等扫描结果刷新状态（`UploadManager.tsx:282-306`）：
+
+代码证据：`forward_part/static/components/UploadManager.tsx:282-306`
+
+```tsx
+  useEffect(() => {
+    const pendingTasks = tasks.filter((t) => t.status === 'pending_scan' && t.fileHash);
+    if (pendingTasks.length === 0) return;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  }, [tasks]);
+```
+
+解释：
+
+- "上传成功"只表示对象和元数据已进入系统，不表示文件已可下载：`pending_scan` 是正常中间态。
+- 落库失败（如复用被 `infected` 拒绝）时，服务端会删掉刚传的对象（`MinIODeleteObject`）再返回错误，避免留下孤儿对象。
+- 真正可读状态由 store service 扫描后写 `success`（第 13 章详读）；前端轮询 `queryFiles` 用 hash 对照状态刷新任务 UI。
+- 轮询只针对 `pending_scan` 任务，3 秒一次；`useEffect` 依赖 `tasks`，任务集合变化时自动重启轮询。
+
+## Outbox 投递：dispatcher 如何把事件发给 Kafka
+
+outbox 表里的 `NEW` 事件由 file service 内的 `OutboxDispatcher`（`backword_part/file_server/file_srv/kafkaproduct.go:19`）消费并投递到 Kafka。它每 2 秒轮询一次，用 `FOR UPDATE SKIP LOCKED` 抢占一批记录（`kafkaproduct.go:113-165`）：
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:113-165`
+
+```go
+// claimBatch 抢占一批可发送的 outbox：将 NEW/FAILED 且 next_retry_at<=now 的记录置为 SENDING 并上锁
+func (d *OutboxDispatcher) claimBatch(ctx context.Context) ([]model.Outbox, error) {
+	now := time.Now()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+worker 用 `sendOne` 构造 sarama 消息发出（`kafkaproduct.go:167-195`）：
+
+代码证据：`backword_part/file_server/file_srv/kafkaproduct.go:167-195`
+
+```go
+func (d *OutboxDispatcher) sendOne(ctx context.Context, ob *model.Outbox) error {
+	if d.producer == nil {
+		return fmt.Errorf("[sendOne]kafka producer not initialized")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 配置：`pollInterval 2s`、`batchSize 50`、`workerCount 8`、`lockTTL 30s`（`kafkaproduct.go:29-42`）。
+- 抢占分两步且在同一事务：先 `SKIP LOCKED` 查出 `NEW/FAILED` 且 `next_retry_at` 到期、锁已过期的记录，再整批置 `SENDING` 并写 `locked_by/locked_until`——多实例部署不会重复投递。
+- 发送成功 `markSent`（`kafkaproduct.go:197-208`）置 `SENT`；失败 `markFailed`（`kafkaproduct.go:210-225`）置 `FAILED`、`retry_count+1`、按指数退避设置 `next_retry_at`（`backoff`，`kafkaproduct.go:227-237`，上限 5 分钟）。
+- `msg.Key = file.Sha1`：同一 hash 的扫描事件进同一 Kafka 分区，消费端按内容串行处理。
+- 即便 `markSent` 更新失败（消息已发但状态没改），也不会重复业务副作用——因为消费端 Inbox 以 `event_id` 幂等（第 12 章详读）。
+
+## 重复 hash 复用（秒传语义）
+
+`UploadFile` 收到 meta 后先 `findFileByHash`。如果 `File` 已存在，就不上传对象了：先排空客户端剩余的 data 帧，再只补 `UserFile` 关系（`file.go:660-686`）：
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:660-686`
+
+```go
+	existing, err := findFileByHash(ctx, meta.FileHash)
+	if err != nil {
+		return status.Errorf(codes.Internal, "query file by hash: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:421-431`
+
+```go
+func findFileByHash(ctx context.Context, fileHash string) (*model.File, error) {
+	var file model.File
+	err := internal.DB.WithContext(ctx).Where("sha1 = ?", fileHash).Take(&file).Error
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `drainUploadFileStream`（`file.go:433-446`）把客户端剩余的 data 帧全部 Recv 掉（客户端可能已经把整个文件发出来了），避免客户端还没收完响应就断开。
+- 复用时 `upsertFileAndRelation` 传入 `existing.ObjectKey` 和 `requeueScan = (existing.Status == FileScanFailed)`：只有上次扫描失败的复用才重新排队扫描。
+- 返回消息由 `reuseMessage`（`file.go:113-130`）生成："existing clean object reused"、"existing object reused, virus scan queued" 等。
+- 排查"秒传/重复上传"时，应看 `upsertFileAndRelation` 是否复用了已有 `File`，而不是看 MinIO 是否重新写入对象。
+- 依赖前提是 hash 可靠：前端用 SHA-256 全文件计算，服务端信任 `meta.FileHash` 并以其作为内容身份（`files/<hash>` object key）。
+
+## 状态转换
+
+小文件上传要按两个维度理解状态：前端上传任务状态和后端文件安全状态。
+
+```text
+前端选择文件 -> hashing -> uploading -> pending_scan/success/infected/scan_failed/error
+```
+
+后端文件状态更关键：
+
+```text
+HTTP body 接收中 -> Drogon gRPC stream 转发中 -> MinIO object stored -> MySQL File/UserFile 已落库 -> pending_scan
+pending_scan -> store service 扫描 clean -> success -> 下载/预览接口允许签 URL
+pending_scan -> ClamAV FOUND -> infected -> 删除 object，前端禁用下载
+pending_scan -> 扫描失败耗尽重试 -> scan_failed/DLQ -> 需要排障或重试恢复
+```
+
+这组状态说明：`UploadFileResp{Status: pending_scan}` 不是失败，而是异步扫描还没收敛；只有 `success` 才是可读终态。
+
+## 关键数据结构 / 字段
+
+- `UploadFileMeta.user_id`：由 Gateway 从 JWT 身份写入，是文件归属校验的依据。
+- `UploadFileMeta.file_hash`：前端计算出的内容身份，用于 object key、去重、UserFile 关联。
+- `UploadFileMeta.file_size`：声明大小，Go 服务用实际写入字节数校验 size mismatch。
+- `File.sha1 / File.object_key`：内容对象身份和 MinIO 存储位置。
+- `File.status`：安全状态门禁，上传后通常先是 `pending_scan`。
+- `Outbox.event_id / payload`：扫描事件，保证上传落库后 store service 能继续处理。
+
+## 常见误判与排障顺序
+
+- 误判：上传接口返回 200 就能下载。正确理解：200 只表示对象/元数据已进入系统，是否可读看扫描后的 `File.status`。
+- 误判：OpenResty 负责上传业务。正确理解：OpenResty 只做入口代理；协议转换在 Drogon，存储在 file service/MinIO。
+- 误判：小文件一次性读入后保存。正确理解：Gateway 到 Go 是 gRPC stream，Go 到 MinIO 是 `io.Pipe` 流式上传。
+- 排障顺序：前端 hash/headers -> OpenResty body 代理 -> Drogon `LoadFile/UploadFileProxy` -> gRPC stream -> `UploadFile` size 校验 -> MinIO -> DB/Outbox -> store scan。
+
+## 阅读检查
+
+- 能讲清 `HTTP body -> gRPC stream -> io.Pipe -> MinIO PutObject` 的数据流。
+- 能说明第一帧 meta 的字段作用，以及 gateway 如何把 HTTP header 填进 meta。
+- 能解释为什么上传返回成功后仍可能是 `pending_scan`，以及前端如何感知状态变化。
+- 能定位 `simpleUpload`、`LoadFile`、`UploadFile`、`MinIOUploadStream`、`upsertFileAndRelation`。
+- 能说出 5MB 分界（`SIMPLE_UPLOAD_THRESHOLD`）以及前端按什么条件分流到 multipart。
+- 能解释 `nginx.conf` 里 `proxy_request_buffering off` 对流式上传的意义。
+- 能描述 OutboxDispatcher 的抢占流程（SKIP LOCKED、SENDING 锁、FAILED 退避）以及消费端 Inbox 幂等为什么能兜底 at-least-once。
+- 能区分"内容对象已上传"与"用户文件可下载"两个概念，并说出各自由谁决定。

@@ -1,0 +1,347 @@
+# 01. 架构全景：从用户请求到对象存储
+
+## 本章定位
+
+本章提供“上帝视角”：先把 Client、OpenResty、Drogon Gateway、Go gRPC 服务、MySQL、Redis、Kafka、MinIO、ClamAV、Consul、Nacos 放到同一张图里，再区分同步请求链路和异步扫描链路。读完本章后，再进入 02–18 的各层细节。
+
+## 总链路
+
+```text
+同步业务链路：Client -> OpenResty -> Drogon Gateway -> gRPC service -> MySQL/Redis/MinIO -> HTTP response
+异步扫描链路：file_srv -> Outbox -> Kafka -> store_srv -> MinIO stream -> ClamAV -> File.status
+配置发现链路：Nacos -> ViperConf -> global clients；Go service -> Consul register；Gateway -> Consul discover/cache
+前端状态链路：React state -> ApiService -> Gateway response -> pending_scan 轮询 -> success/infected/scan_failed
+```
+
+本章只讲模块协作和职责边界，不深入每个函数实现；函数级源码证据放在后续章节展开。
+
+## 分层视角
+
+CloudDisk V2 是一个多语言、多中间件的网盘系统。入口是 OpenResty，HTTP 应用网关是 C++ Drogon，核心业务服务是 Go gRPC，异步处理由 Kafka + Store service 承担，持久化和对象存储分别落在 MySQL/Redis/MinIO/AliOSS。
+
+```text
+Client / React
+  -> OpenResty :2024 / :2025
+    -> C++ Drogon Gateway :38080
+... 省略非关键行，保留完整路径/锚点见上文 ...
+    -> MinIO object stream -> ClamAV -> MySQL status update / DLQ
+```
+
+代码证据：`scripts/project_start_scripts/start_all.sh`
+
+```bash
+# 主流程
+main() {
+    reconcile_k8s_runtime
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+main
+```
+
+解释：
+
+- 启动脚本的 `main()` 严格按“基础设施 -> OpenResty -> C++ Gateway -> Go 服务 -> 前端”的顺序拉起整条链，与全景图自上而下的分层一一对应。
+- `check_infrastructure`（start_all.sh 的 `check_infrastructure`）启动前先探测 Nacos、Consul、MySQL、Redis、Kafka、MinIO 六个中间件，任何一个不可用直接退出——中间件是整条链的底座。
+- `start_go_services` 依次拉起 account_srv、file_srv、store_srv、ai_srv、mcp_srv，其中 store_srv 是纯异步消费者，不属于同步请求链上的任何一层。
+
+## 每层职责
+
+| 层 | 主要职责 | 关键源码 |
+| --- | --- | --- |
+| React Client | 登录态、文件列表、上传任务、预览/下载交互 | `forward_part/static/App.tsx`, `services/api.ts`, `components/UploadManager.tsx` |
+| OpenResty | 统一入口、CORS、Request ID、静态资源、上传/预览路由转发 | `forward_part/config/nginx/nginx.conf` |
+| Drogon Gateway | HTTP controller、JWT filter、HTTP/gRPC 转换、Consul 发现后端实例 | `forward_part/gateway/main.cc`, `controllers/*`, `filters/jwt_decode.cc` |
+| Go gRPC services | 账号、文件、AI 的核心业务逻辑 | `backword_part/account_server/account_srv`, `backword_part/file_server/file_srv`, `backword_part/AI_server` |
+| Async Store | 消费文件上传事件、病毒扫描、状态落库、DLQ | `other_srv/store_srv/main.go`, `other_srv/store_srv/kafka/` |
+| Infrastructure | 配置、发现、缓存、元数据、对象、消息 | Nacos、Consul、Redis、MySQL、MinIO、AliOSS、Kafka、ClamAV |
+
+代码证据：`forward_part/static/services/api.ts`
+
+```ts
+class ApiService {
+  private getToken(): string | null {
+    return localStorage.getItem('oss_token');
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`forward_part/gateway/main.cc`
+
+```cpp
+// 启动 Drogon HTTP 服务
+drogon::app().addListener(listenHost, port); // 监听在 0.0.0.0
+drogon::app().enableRequestStream(true);
+drogon::app().setClientMaxBodySize(128ULL * 1024 * 1024);
+drogon::app().setClientMaxMemoryBodySize(128ULL * 1024 * 1024);
+```
+
+解释：
+
+- React 层不直接知道 gRPC，它只发 HTTP，且每个请求同时携带 `Authorization: Bearer <JWT>` 和自生成的 `X-Request-Id`（api.ts 的 `request`）。这两个头是后续所有层身份和追踪的基础。
+- Drogon 层的职责证据：`enableRequestStream(true)` 开启请求流式模式（`/file/upload` 上传 body 是流式到达的），`setClientMaxBodySize(128M)` 限制单请求体大小，与 nginx.conf 的 `client_max_body_size 128m` 一致。
+- OpenResty 层与 Go 层的职责分别由 nginx.conf 和各 service 的 main.go 承担，下文各节逐一展开。
+
+## 中间件作用位置
+
+- Nacos：Go 服务初始化配置源，见 `internal/viper_config_centre.go` 和 `scripts/nacos-config/clouddisk.json`。
+- Consul：服务发现/注册；Go 服务启动时注册，Drogon 网关查询实例，见 `internal/concul.go`、`forward_part/internal/consul.cpp`、`forward_part/gateway/ConsulRegister.cpp`。
+- Redis：JWT 白名单/黑名单、注册验证码 pending 数据、multipart session meta；入口在 `gateway` Redis client 与 Go `internal.RedisClient`。
+- MySQL：账号、文件元数据、用户文件关系、Outbox/Inbox/DLQ 状态，模型在 `backword_part/model/`。
+- Kafka：异步事件总线；file service 写 outbox 后 dispatcher 发送，store service 消费。
+- MinIO：当前主对象存储，支持 PutObject、预签名下载、multipart。
+- AliOSS：有客户端封装，但主上传/扫描链路以 MinIO 为主。
+- ClamAV：store service 对对象流做病毒扫描，决定文件最终可用状态。
+
+代码证据：`internal/viper_config_centre.go`
+
+```go
+	// 3. 热更新监听
+	err = client.ListenConfig(vo.ConfigParam{
+		DataId: "clouddisk.json",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	Logger.Info("All services initialized")
+```
+
+代码证据：`internal/concul.go`
+
+```go
+// RegisterGrpcService Grpc注册服务
+func RegisterGrpcService(serviceName, serviceID, host string, port int) error {
+	// 健康检查配置
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- Nacos 是配置源头：`viper_config_centre.go` 的 `init()` 先 `GetConfig` 拉取 `clouddisk.json` 解析进全局 `internal.ViperConf`，再 `ListenConfig` 挂热更新回调，最后按顺序初始化 Redis/DB/Consul/Kafka/AliOSS/MinIO 六个全局客户端。所有 Go 服务启动时自动执行这段 `init()`，这就是“中间件在 Go 侧的接入点”。
+- Consul 的注册不是“注册就完事”：`RegisterGrpcService` 同时带上 gRPC 健康检查（`GRPC: host:port`，5 秒一次），30 秒不健康会被自动注销。与之配套，`RegisterGRPCHealth`（`internal/concul.go` 的 `RegisterGRPCHealth`）在每个 Go gRPC server 上注册了标准 health 服务，否则健康检查无从谈起。
+- Redis、Kafka、MinIO、ClamAV 的接入点分别是 `internal/redis.go` 的 `InitRedis`（`RedisClient` 为 `redis.UniversalClient`，兼容单机/哨兵/集群）、`internal/kafka.go` 的 `InitKafkaProducer`（SyncProducer，15 次重试后 panic）、`internal/minio.go` 的 `InitMinio`（自动确保 bucket 存在）、`internal/clamav.go` 的 `ClamAVConfig.Timeout/SocketPath`（支持 TCP 与 unix socket 两种模式）。
+- 注意职责边界：Go 侧用 Consul 做**注册**，Drogon 侧用 Consul 做**查询**（`forward_part/internal/consul.cpp` 的 `getServiceInstances`，`?passing=true`）；两边语言不同、客户端实现不同，但配合的是同一份服务数据。
+
+## 同步链路和异步链路
+
+同步链路解决“请求是否被接收、元数据是否创建、URL 是否返回”。例如登录、文件列表、小文件上传接收、分片初始化都走 HTTP -> Drogon -> gRPC。
+
+异步链路解决“上传后的文件是否安全可用”。`file_srv` 在 DB 事务内创建 `File` 和 `Outbox`，`OutboxDispatcher` 发送 Kafka，`store_srv` 扫描对象并把 `File.status` 改为 `success/infected/scan_failed`。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go` 的 `UploadFile`
+
+```go
+func (s FileServer) UploadFile(stream FileService_UploadFileServer) error {
+	...
+	first, err := stream.Recv()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go` 的 `enqueueScanRequested` 与 `upsertFileAndRelation`
+
+```go
+func enqueueScanRequested(ctx context.Context, tx *gorm.DB, file *model.File, userID string) error {
+	txID := uuid.NewString()
+	eventID := txID + ":SCAN_REQUESTED"
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+```go
+	if shouldEnqueue {
+		if err := enqueueScanRequested(ctx, tx, &file, userID); err != nil {
+			return err
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	})
+```
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go` 的 `processMessageInternal`
+
+```go
+	signature, infected, err := c.scanObject(ctx, payload.OssKey, payload.Size)
+	if err != nil {
+		...
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	return c.finalizeClean(ctx, &payload)
+```
+
+解释：
+
+- 同步链的终点是“对象已进 MinIO + 元数据已落库”：`UploadFile` 把 gRPC stream 收到的数据块通过 `io.Pipe` 喂给 `MinIOUploadStream`，全程流式，不落本地临时文件。
+- 同步链上返回给前端的 `Status` 通常不是 `success` 而是 `pending_scan`——`upsertFileAndRelation` 创建 `File` 时初始状态就是 `model.FilePendingScan`，并在**同一个 DB 事务内**写入一条 `Outbox` 记录（`enqueueScanRequested`），这是 outbox 模式的落点：业务提交和事件入队要么都成功、要么都失败。
+- 异步链从 `Outbox` 起步：`file_srv` 的 `OutboxDispatcher`（kafkaproduct.go）轮询 claim 未发送记录，`sendOne` 发到 Kafka topic `file.upload.cmd`，并把 `Outbox` 标为 `SENT`；失败则标 `FAILED` 带指数退避重试。
+- 异步链的终点在 store_srv：`processMessageInternal` 消费消息后先做 Inbox 幂等（`tryBeginInbox`），再 `scanObject`（MinIO 取对象流 -> ClamAV），最后 `finalizeClean`（status=success）或 `finalizeInfected`（status=infected 且删除对象）或标记 `scan_failed` 并进 DLQ。
+- 读源码时只要记住：`UploadFile` 返回“上传已接收”不代表“文件可下载”，`File.status == success` 才是可下载的充分条件。
+
+## 当前实现和理想图的差异
+
+OpenResty 目录有 Lua 服务发现文件 `lua/consul_service.lua` 与 `lua/balancer.lua`，但当前 `nginx.conf` 中 `upstream cloudisk_backend` 固定为 `server 127.0.0.1:38080`。所以学习时不要把它误读成已经启用 Lua 动态上游；真实动态发现主要发生在 Drogon 到 gRPC 服务之间。
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+	lua_package_path "/home/lihaoqian/project/clouddisk_v2/forward_part/config/nginx/?.lua;;";
+
+	lua_shared_dict consul_services 10m;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+	}
+```
+
+代码证据：`forward_part/config/nginx/lua/consul_service.lua`
+
+```lua
+function _M:fetch()
+    local httpc = http.new()
+
+... 省略非关键行，保留完整路径/锚点见上文 ...
+end
+```
+
+解释：
+
+- nginx.conf 第 41-42 行的注释写得很直白：“本地开发环境固定转发到 Gateway :38080”，并且说明原因是镜像内缺 `lua-resty-http` 依赖。
+- `lua_shared_dict consul_services 10m` 和 `lua_package_path` 说明 Lua 侧的基础设施（共享内存字典、模块路径）已经就位，`consul_service.lua` 也确实能完成“查 Consul passing 实例 -> 写入共享字典”的 fetch 逻辑——但它没有被任何 `location` 或 `balancer_by_lua` 调用。
+- 结论：当前 OpenResty 是静态 upstream，`consul_service.lua`/`balancer.lua` 是“可用但未接线”的能力文件。真正动态的服务发现发生在 Drogon 层（详见 03 章），不要在入口层寻找动态上游。
+
+## 源码精读：全链路如何从源码拼出来
+
+### 1. 外部流量先进入 OpenResty，再固定转给 Drogon
+
+代码证据：`forward_part/config/nginx/nginx.conf`
+
+```nginx
+upstream cloudisk_backend {
+    server 127.0.0.1:38080;
+}
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- 当前 OpenResty 的 `cloudisk_backend` 是固定地址 `127.0.0.1:38080`，也就是 C++ Drogon Gateway 的监听端口（gateway/main.cc 的 `addListener(listenHost, port)`，端口来自 `config.json`）。
+- `/file/upload` 这类 API 在 OpenResty 层没有任何业务逻辑，只是 `proxy_pass` 到 gateway；入口层做的是转发、CORS、Request ID、buffering 控制（详见 02 章）。
+- 所以全景图第一段应画成 `Client -> OpenResty -> Drogon`，不能画成 `Client -> OpenResty -> Go service`。
+
+### 2. Go 服务以 gRPC server 方式暴露内部能力
+
+代码证据：`backword_part/file_server/file_srv/main.go`
+
+```go
+	// ---- 2. 创建 gRPC Server ----
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(internal.RequestIDUnaryInterceptor()),
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- 启动顺序：`ListenAutoPort()` 找随机空闲端口 -> `grpc.NewServer`（挂 RequestID 拦截器）-> 注册 FileServiceServer -> 注册 health -> Consul 注册 -> 启动 outbox dispatcher -> `Serve`。gRPC server 与异步投递器在同进程共存。
+- `RequestIDUnaryInterceptor`/`RequestIDStreamInterceptor`（internal/interceptor.go）从 gRPC metadata 提取 `x-request-id` 注入 context——这是 OpenResty 生成的 Request ID 进入 Go 服务的方式。
+- 同一个 main.go 把 file service 分成两个角色：`RegisterFileServiceServer` 是同步 gRPC API 供 Drogon 调用；`NewOutboxDispatcher(...).Start(ctx)` 是异步事件投递器，把 DB outbox 中的扫描事件发到 Kafka。
+- 这解释了为什么文件上传链路里同时存在同步返回和异步扫描：上传接口负责接收和落元数据，扫描状态由后续事件链路推进。
+
+### 3. 账号服务和 AI 服务使用相同启动模板
+
+代码证据：`backword_part/account_server/account_srv/main.go`, `backword_part/AI_server/main.go`
+
+```go
+	// ---- 2. 创建 gRPC Server ----
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(internal.RequestIDUnaryInterceptor()),
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+```go
+	// consul注册服务
+	aipb.RegisterAIServiceServer(grpcServer, &aipb.AIServer{})
+	...
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		port)
+```
+
+解释：
+
+- 三个业务服务（account_srv/file_srv/AI_srv）共用同一套“随机端口 + gRPC server + Consul 注册 + health”模板，只有注册的 server 实现与 Consul 服务名不同（`account_srv`/`file_srv`/`AI_srv`）。
+- 每个服务的 proto 文件是这份模板的“合同来源”：`proto/account_srv/account.proto` 定义 `accountService`（Signin/Signup/VerifyCode/Userinfo），`proto/file_srv/file.proto` 定义 `fileService`（查询/上传/下载/分片等 13 个 RPC），`proto/AI_srv/ai.proto` 定义 `AIService`（AIrequest）。Drogon 网关和 Go 服务都从这些 proto 生成各自的客户端/服务端代码。
+- 注册到 Consul 的是随机端口：`ListenAutoPort` 用 `net.Listen("tcp", ":0")` 拿到空闲端口后直接 `Serve(lis)`，绝不再 `Listen` 一次——这也是 main.go 注释反复强调“只监听一次”的原因。因此 Consul 里登记的地址是每次启动都会变的，必须靠服务发现而不能写死。
+
+### 4. Gateway 不是透明代理，而是 HTTP/gRPC 编排层
+
+代码证据：`forward_part/gateway/controllers/FileController.h`
+
+```cpp
+	ADD_METHOD_TO(FileController::filequeryinfo, "/file/query", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
+	ADD_METHOD_TO(FileController::CompleteMultipart, "/file/CompleteMultipart", Post, "jwt_decode");
+```
+
+解释：
+
+- 浏览器看到的是 HTTP API，但这些 API 先进入 Drogon controller。`jwt_decode` 也证明鉴权发生在 gateway 层，而不是 OpenResty 层（filters/jwt_decode.cc 校验 `Authorization: Bearer`、Redis 黑名单/白名单后把 `ID/Name` 注入 request attributes）。
+- gateway 拿到 JWT 注入的身份后，通过 proto 生成的 `fileService::Stub` 调用 Go 侧 gRPC（`FindService("file_srv")` 走 Consul + 缓存），再把 gRPC response 转回 JSON。这套编排细节见 03 章。
+- 也就是说，OpenResty 到 Drogon 是“转发”，Drogon 到 Go 是“协议转换 + 编排”，两层边界不要混淆。
+
+### 5. 文件最终可用性由 Store service 决定
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go`
+
+```go
+	signature, infected, err := c.scanObject(ctx, payload.OssKey, payload.Size)
+	if err != nil {
+		...
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	return c.finalizeClean(ctx, &payload)
+```
+
+解释：
+
+- 这段代码是全景图里异步链路的核心证据：上传后文件通常先是 `pending_scan`，真正变成 `success` 或 `infected` 的地方不是上传接口，而是 store service 消费 Kafka 后的扫描分支。
+- `scanObject`（kafkacunsumer.go 的 `scanObject`）从 MinIO 拉对象流（`MinIOGetObjectStream`）喂给 ClamAV（`ScanReaderWithClamAV`），`finalizeClean` 在事务里把 `File.status` 改为 `success`，`finalizeInfected` 先把对象删掉再落 `infected`。
+- 完整事件链（可对照 12 章、13 章细读）：`upsertFileAndRelation` 事务写 File(pending_scan)+Outbox -> dispatcher 发 Kafka `file.upload.cmd` -> store_srv `tryBeginInbox` 幂等 -> 扫描 -> `finalizeClean/Infected` -> `markInboxDone`；失败进入 `.dlq` topic 由低频 DLQ consumer 重放。
+
+### 6. 该章结论
+
+源码共同证明当前架构应按两条链读：
+
+```text
+同步请求链：Client -> OpenResty -> Drogon Gateway -> Go gRPC service -> MySQL/Redis/MinIO
+异步扫描链：file_srv Outbox -> Kafka -> store_srv Inbox -> MinIO stream -> ClamAV -> MySQL status
+```
+
+读源码时只要先分清这两条链，就不会把“上传成功”误认为“文件已可下载”，也不会把 OpenResty 的入口代理职责误解成业务网关职责。
+
+## 状态转换
+
+全局架构中最重要的跨层状态有三条：
+
+```text
+用户身份：未登录 -> Signin -> JWT -> Gateway request attributes -> gRPC metadata/业务参数
+文件安全：uploaded/object stored -> pending_scan -> success/infected/scan_failed
+异步事件：Outbox new -> Kafka sent -> Inbox processing -> done/DLQ
+```
+
+这些状态分别跨越前端、Gateway、Go 服务、数据库、Kafka 和 store service。学习时要避免只看单个服务的局部成功。
+
+## 关键数据结构 / 字段
+
+- `JWT / Authorization`：用户身份跨 HTTP 层传递的凭证。
+- `X-Request-Id`：跨入口、网关、gRPC、Kafka、store service 的排障关联字段。
+- `File / UserFile`：内容对象与用户文件关系的分离。
+- `File.status`：上传、扫描、下载/预览之间的核心状态门禁。
+- `Outbox / Inbox / DLQFailure`：异步一致性三件套。
+- `Consul service name`：Gateway 找到 gRPC 后端的服务发现 key。
+
+## 常见误判与排障顺序
+
+- 误判：OpenResty、Drogon、Go Gateway 是一层。正确理解：OpenResty 是入口代理，Drogon 是应用网关，Go 服务是内部业务服务。
+- 误判：上传成功等于文件可用。正确理解：上传只进入 `pending_scan`，store service 扫描后才进入可读状态。
+- 误判：Consul 定义 RPC。正确理解：Consul 只发现地址，RPC 合同来自 proto/generated stub。
+- 排障顺序：入口请求 -> Gateway 路由/filter -> gRPC 调用 -> 服务内部 DB/Redis/MinIO -> Outbox/Kafka/store scan -> 前端状态轮询。
+
+## 阅读检查
+
+- 能用 `start_all.sh` 的 `main()` 说出各层启动顺序，并指出中间件探测失败时启动脚本的行为。
+- 能解释 `UploadFile` 同步返回后 `File.status` 为什么不是 `success`，以及谁、在哪个环节把它改成 `success/infected/scan_failed`。
+- 能说出 `x-request-id` 在链路中经过的每一站：前端生成 -> OpenResty 透传 -> Drogon attributes -> gRPC metadata -> Outbox Headers -> Kafka RecordHeader -> store_srv 日志。
+- 能区分 OpenResty 固定 upstream 与 Drogon 侧 Consul 动态发现，并指出 Lua 动态上游文件“存在但未接线”的代码依据。
+- 能从 `internal/viper_config_centre.go` 的 `init()` 列出六个全局客户端（Redis/DB/Consul/Kafka/AliOSS/MinIO）的初始化顺序。

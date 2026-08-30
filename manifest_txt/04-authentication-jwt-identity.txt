@@ -1,0 +1,329 @@
+# 04. 鉴权系统：JWT、黑白名单、用户身份注入
+
+## 本章定位
+
+本章讲用户身份如何从账号服务登录结果变成 Gateway 和后端服务可用的用户上下文：账号服务签发 JWT，前端保存并携带，OpenResty 透传，Drogon `jwt_decode` filter 校验并注入 request attributes，controller 再把身份放进业务参数或 gRPC metadata。
+
+## 总链路
+
+鉴权链路横跨四层：账号服务签发 JWT -> 前端保存 token 并在每次请求携带 `Authorization: Bearer <token>` -> Drogon `jwt_decode` filter 校验签名/issuer/Redis 黑白名单 -> 用户身份注入 request attributes -> controller 读取 attributes 并传给 gRPC 服务 -> file service 在 multipart 场景用 gRPC metadata 二次校验 owner。
+
+```text
+account_srv: account.go:Signin 签发 JWT
+  -> frontend: services/api.ts 保存 oss_token、统一带 Authorization
+  -> Drogon: filters/jwt_decode.cc 校验签名 + issuer + Redis 黑白名单
+... 省略非关键行，保留完整路径/锚点见上文 ...
+  -> file_srv: protobuf/file.go:ensureMultipartOwner 二次校验
+```
+
+解释：
+
+- 每条箭头都对应真实源码位置，排查 401/403 时按链路逐段定位。
+- 链路的最后一段（multipart owner 校验）只在需要操作上传会话的接口上存在，普通文件查询接口不校验 owner。
+- 注意：JWT 解析发生在 Drogon 层，Go file service 收到的已经是 Drogon 处理后的 gRPC request，它不应该、也不需要从 HTTP header 解析 JWT。
+
+## JWT 生成
+
+登录逻辑在 `backword_part/account_server/account_srv/protobuf/account.go:Signin`。它按用户名查 `Account`，校验密码 hash，然后调用 `internal/jwt.go` 的 `GenerateToken` 生成 token。
+
+代码证据：`backword_part/account_server/account_srv/protobuf/account.go:Signin`
+
+```go
+func (a *AccountServer) Signin(ctx context.Context, signin *ReqSignin) (*Resp, error) {
+	l := internal.LoggerWithRID(ctx, internal.Logger)
+	var account model.Account
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 账号不存在返回 code 1，密码错误返回 code 2，token 生成失败返回 code 3——业务状态全在 `Resp.Code`，不抛 gRPC status error。
+- claims 只有三个业务字段：`ID`、`Name`、`Issuer="Signin"`，过期时间 24 小时。
+- token 不是放在独立字段返回，而是塞进 `Resp.Message` 返回给 gateway，gateway 再把它转成 HTTP JSON 的 `token` 字段（见 `AccountController.cc:signin` 的 `ret["token"] = response->message()`）。
+
+生成 token 的底层实现在 `internal/jwt.go`，算法固定为 HS256。
+
+代码证据：`internal/jwt.go:GenerateToken`、`internal/jwt.go:GetJWT`
+
+```go
+func GetJWT() *JWT {
+	jwtOnce.Do(func() {
+		jwtInstance = &JWT{SigningKey: []byte(ViperConf.JWTConfig.SigningKey)}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`internal/jwt.go:CustomClaims`
+
+```go
+type CustomClaims struct {
+	jwt.StandardClaims
+	ID   int32
+	Name string
+}
+```
+
+解释：
+
+- `JWT` 是单例（`sync.Once`），签名 key 来自 `ViperConf.JWTConfig.SigningKey`（Nacos -> Viper 配置流，见 06 章）。
+- `CustomClaims` 内嵌 `jwt.StandardClaims` 再追加 `ID`/`Name`，这决定了 JWT payload 里最终有哪些字段。
+- 同一份 `SigningKey` 必须被 account service（签发）、Drogon filter（校验）共享，两边是配置文件里的同一个 secret。
+
+## 前端保存与携带
+
+`forward_part/static/services/api.ts` 的 `ApiService` 把登录返回的 token 保存到 `localStorage('oss_token')`。统一 request 方法会读取 token 并设置 `Authorization` 头，业务代码不需要手写 header。
+
+代码证据：`forward_part/static/services/api.ts:getToken`、`request`
+
+```ts
+private getToken(): string | null {
+  return localStorage.getItem('oss_token');
+}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+  headers.set('X-Request-Id', requestId);
+```
+
+解释：
+
+- 所有 API 走 `request()`，token 注入是这一层统一完成的；登录态失效排查顺序：`oss_token` 是否存在 -> 请求是否经过 `request()` -> 服务端返回的 401。
+- 同一个函数还生成了 `X-Request-Id`（`crypto.randomUUID()`），配合 gateway/Go 侧的 metadata 透传，全链路日志可以串起来（见 05 章 interceptor）。
+
+登录成功后写入 token，登出时把它加黑名单并清除本地存储。
+
+代码证据：`forward_part/static/services/api.ts:signin`、`logout`
+
+```ts
+async signin(data: any) {
+  const res = await this.request('/user/signin', { method: 'POST', body: JSON.stringify(data) });
+  if (res && res.token) localStorage.setItem('oss_token', res.token);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 前端登出并不是"只删本地 token"，它会先调 `/user/token/blacklist` 让 gateway 把 token 塞进 Redis 黑名单——即使 token 被截获也立刻失效。
+- `logout()` 同时清掉 multipart 上传会话记录，避免残留会话在下次登录时恢复上传。
+- 登录返回的 JSON 里 `token` 字段是 gateway 从 gRPC `Resp.Message` 转出来的（见下一节 signin 的完整流程）。
+
+## Drogon filter
+
+`forward_part/gateway/filters/jwt_decode.cc` 的 `doFilter` 做四件事：透传 X-Request-Id、解析 Bearer token、校验签名和 issuer、查询 Redis 黑白名单。全部通过后才调用 `fccb()` 放行，否则用 `fcb(resp)` 直接终结请求。
+
+代码证据：`forward_part/gateway/filters/jwt_decode.cc:doFilter`
+
+```cpp
+void jwt_decode::doFilter(const HttpRequestPtr &req,
+						  FilterCallback &&fcb,
+						  FilterChainCallback &&fccb)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- filter 的参数语义：`fcb(resp)` 表示"请求到此为止，返回该响应"；`fccb()` 表示"校验通过，继续执行后续 filter/controller"。整个文件就是这两种回调的组合。
+- 校验是"三连"：`allow_algorithm(hs256)` 限定算法、`with_issuer("Signin")` 限定签发方、`verify(decoded)` 做签名验证。签名 key 来自 `MyAppData::instance().SigningKey`（gateway 启动时从 config.json 读入，见 03 章）。
+- 算法/issuer/签名任何一项不对都会抛异常落入 catch，统一返回 401，不区分具体失败原因（避免给攻击者提示）。
+- 这里顺带把 `X-Request-Id` 从 HTTP header 放进 request attributes，controller 层可以直接取用。
+
+校验成功后，filter 把用户身份写入 request attributes，这是 HTTP 鉴权和业务 controller 的分界线。
+
+代码证据：`forward_part/gateway/filters/jwt_decode.cc:doFilter`（黑名单/白名单检查后）
+
+```cpp
+		redisClient->execCommandAsync(
+			[=](const drogon::nosql::RedisResult &r2)
+			{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+			"ZSCORE %s %s", whitelistKey.c_str(), token.c_str());
+```
+
+解释：
+
+- `ID`/`Name` 是从 JWT claims 里读出的原始值，原样放进 attributes；后续 controller 通过 `getAttributes()->get<int>("ID")` 读取。
+- 只有在 Redis 白名单查询返回非空（kNil 之外）时才放行，说明"签名正确"还不是充分条件，token 必须在白名单里。
+- 黑名单检查在它之前执行（`SISMEMBER jwt:blacklist`），见"Redis 黑白名单"小节。
+
+## Redis 黑白名单
+
+黑名单是 Redis SET（`jwt:blacklist`），白名单是按用户分桶的 ZSET（`jwt:whitelist:user:<id>`，score 为写入时的 unix 秒）。写入端在 `AccountController.cc`，读取端在 `jwt_decode.cc` filter。
+
+登录成功后，gateway 会先本地解码 token 拿到 userId，再把它加进该用户的白名单。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc:signin`
+
+```cpp
+	if (s.ok() && response->code() == 0)
+	{
+		Json::Value ret;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- gateway 收到 token 后先自己 decode 一次（`decodeTokenPayload` 与 filter 相同的 hs256+issuer 校验），目的是拿到 userId 作为白名单 key 的一部分。
+- 注意时序：先写白名单、后把成功响应返回给前端。如果白名单写入失败，登录接口返回 500，前端拿不到 token——保证"能用的 token 一定在白名单里"。
+- 白名单 key 是 `jwt:whitelist:user:<userId>`，同 token 的校验在 filter 里用 `ZSCORE` 完成（score 存在即放行）。
+
+白名单写入是有容量控制的：每个用户只保留最近 2 个 token，多出来的旧 token 会被移进黑名单。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc:addTokenToWhitelist`
+
+```cpp
+	void addTokenToWhitelist(const drogon::nosql::RedisClientPtr &redisClient,
+							 int userId,
+							 const std::string &token,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+```cpp
+		// ZADD 成功后 ZCARD 统计个数
+		"ZCARD %s", whitelistKey.c_str());
+		// 超过 2 个时 ZPOPMIN 弹出最旧的
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		"SADD %s %s", kJwtBlacklistKey.c_str(), removedToken.c_str());
+```
+
+解释：
+
+- 命令链：`ZADD`（当前时间戳为 score）-> `ZCARD`（查个数）-> 超过 2 个时 `ZPOPMIN`（弹掉最旧的）-> 对每个被弹 token `SADD jwt:blacklist`。
+- 效果：同一用户最多同时保有 2 个有效登录；第 3 次登录会作废最旧的 token（进黑名单），这正是"踢掉旧设备"的实现。
+- 黑名单用 SET 而不是 ZSET，因为黑名单不需要排序，只需 `SISMEMBER` 判断存在。
+
+登出或强制下线走 `addToBlacklist`：token 进黑名单 + 从对应白名单 ZSET 移除。
+
+代码证据：`forward_part/gateway/controllers/AccountController.cc:addToBlacklist`
+
+```cpp
+	auto whitelistKey = whitelistKeyForUser(userId);
+	redisClient->execCommandAsync(
+		[callback, token, whitelistKey, redisClient](const drogon::nosql::RedisResult &r)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		"SADD %s %s", kJwtBlacklistKey.c_str(), token.c_str());
+```
+
+解释：
+
+- 先 `SADD jwt:blacklist`，成功后 `ZREM jwt:whitelist:user:<id>`，两个命令都成功才返回 `ok`。
+- filter 侧的判定顺序：黑名单 `SISMEMBER` 命中 -> 401；白名单 `ZSCORE` 未命中 -> 401。黑名单优先级高于白名单。
+- 排查"登录后立即 401"时按三层查：签名 key 是否一致、issuer 是否 `Signin`、白名单 ZSET 里有没有这个 token。
+
+## 身份进入文件服务
+
+`FileController.cc:getArgumentsFromJWT` 从 request attributes 取出 `name` 和 `userId`，供所有文件 API 使用。controller 不解析 JWT，只消费 filter 的注入结果。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:getArgumentsFromJWT`
+
+```cpp
+bool getArgumentsFromJWT(const HttpRequestPtr &req,
+						 drogon::HttpResponsePtr &resp,
+						 std::string &name,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- attributes 里没有 `ID/Name` 时抛异常，说明请求没经过 `jwt_decode` filter 或校验失败，返回 401 `missing_identity`。
+- 每个文件接口的第一件事都是 `FindService` + `getArgumentsFromJWT`，身份是强制的，不是可选参数。
+
+拿到身份后，controller 把 userId/username 塞进 gRPC request，并加 `x-user-id` metadata。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:filequeryinfo`、`Initupload`
+
+```cpp
+	std::string name;
+	int userId = 0;
+	drogon::HttpResponsePtr authResp;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	context->AddMetadata("x-request-id", rid);
+```
+
+```cpp
+		request->set_user_id(std::to_string(userId));
+		request->set_file_size((*jsonPtr)["file_size"].asInt64());
+		if ((*jsonPtr).isMember("content_type"))
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+			context->AddMetadata("x-user-id", std::to_string(userId));
+```
+
+解释：
+
+- 普通接口（query/download/delete）把身份放进 request 字段；multipart 接口（init/presign/complete/abort/status）额外把身份放进 `x-user-id` metadata。
+- 身份的两个载体（request 字段 vs metadata）对应 Go 侧两种读取方式，见下一个证据。
+
+Go 侧 `file.go` 对 multipart 会话做 owner 二次校验：从 gRPC incoming metadata 取 `x-user-id`，与 upload session 归属用户比对。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go:incomingUserID`、`ensureMultipartOwner`
+
+```go
+func incomingUserID(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 这是鉴权链路的最后一环：Drogon 负责"token 合法且属于该用户"，file service 负责"该用户确实拥有这个 upload session"。
+- `x-user-id` 缺失返回 `Unauthenticated`，与 session 归属不一致返回 `PermissionDenied`——gRPC status 会被 gateway 的 `grpcErrorResponse` 转成对应 HTTP 状态码（见 05 章）。
+- 防止拿别人的 `upload_id` 做 InitMultipart/PresignParts/CompleteMultipart/Status 等操作。
+
+## 状态转换
+
+```text
+未登录 -> Signin 成功 -> JWT 返回给前端 -> localStorage('oss_token') 保存
+JWT 已保存 -> ApiService 注入 Authorization -> OpenResty 透传 -> Drogon jwt_decode 校验
+JWT 有效且白名单通过 -> request attributes 写入 ID/Name -> controller 可读取用户身份
+... 省略非关键行，保留完整路径/锚点见上文 ...
+logout / revoke -> token 加入 blacklist 或白名单失效 -> 后续请求被拒绝
+```
+
+这说明鉴权不是单点动作，而是登录、前端存储、入口透传、Gateway 校验、Redis 状态校验、controller 身份读取组成的链路。
+
+## 关键数据结构 / 字段
+
+- `Authorization: Bearer <token>`：前端到 Gateway 的身份载体。
+- `JWT claims`：至少包含用户 id/name、issuer、过期时间等身份信息。
+- `jwt:blacklist`：已吊销 token 的拒绝列表。
+- `jwt:whitelist:user:<id>`：用户维度允许的有效 token 列表。
+- `req attributes ID/Name`：Drogon filter 注入给 controller 的身份上下文。
+- `x-user-id metadata`：Gateway 转 gRPC 时传给后端服务的用户身份补充。
+
+## 常见误判
+
+- JWT 不是 Go file service 直接解析的主入口；HTTP 请求先在 Drogon filter 被解析，Go 侧依赖 request 字段或 metadata。
+- Redis 黑白名单是 gateway 侧的 token 状态，不是账号表字段，改库查不到。
+- 用户身份不是 URL 参数可信来源，核心应来自 token 解码后的 attributes / metadata。
+- 登录/注册接口本身不需要挂 `jwt_decode`——它们还没拿到 token。只有"已登录"接口才挂。
+
+代码证据：`forward_part/gateway/controllers/AccountController.h`（路由表）
+
+```cpp
+	ADD_METHOD_TO(AccountController::signup, "/user/signup", Post);
+	ADD_METHOD_TO(AccountController::signin, "/user/signin", Post);
+	ADD_METHOD_TO(AccountController::sendcode, "/user/sendcode", Post);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	ADD_METHOD_TO(AccountController::addToWhitelist, "/user/token/whitelist", Post, "jwt_decode");
+```
+
+解释：
+
+- `signup/signin/sendcode/verifycode` 不带 `jwt_decode`；`userinfo` 和黑白名单操作带。
+- 对照 FileController.h：全部文件接口都带 `jwt_decode`，因为文件操作必须有用户身份。
+- 所以"哪些接口挂 filter"本身就是鉴权边界的文档，读路由表就能画出系统的公开面。
+
+## 阅读检查
+
+- 能讲清登录返回 token 后，前端（存 `oss_token`）和 gateway（写白名单）各自做什么。
+- 能说出 JWT 的 claims 字段（ID/Name/Issuer/ExpiresAt）分别在哪定义、在哪校验。
+- 能解释 `jwt_decode` filter 的 `fcb`/`fccb` 两个回调分别代表什么，以及校验失败时返回什么状态码。
+- 能画出完整链路：`account.go:Signin` -> `api.ts` -> `jwt_decode.cc` -> attributes -> `getArgumentsFromJWT` -> gRPC request/metadata -> `ensureMultipartOwner`。
+- 能说明白名单 ZSET 为什么用时间戳做 score，以及"每用户最多 2 个有效 token"是怎么实现的（ZADD/ZCARD/ZPOPMIN/SADD 四步）。
+- 能从 `AccountController.h` 的路由表判断哪些接口公开、哪些需要登录。
+- 能指出身份注入的两个消费点：request attributes（Drogon 内）和 `x-user-id` metadata（跨 gRPC 边界）。

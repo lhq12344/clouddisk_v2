@@ -1,0 +1,363 @@
+# 17. 构建、运行、测试、调试
+
+## 本章定位
+
+本章不是单纯命令清单，而是本地构建、启动和排障路线图。目标是让读者知道每条命令验证什么、每个服务依赖哪些基础设施，以及当“服务起不来 / Gateway 找不到服务 / 上传后不可下载”时应该按什么顺序查。
+
+## 总链路
+
+```text
+配置准备：Nacos 配置 -> ViperConf -> MySQL/Redis/Consul/Kafka/MinIO/ClamAV client
+Go 服务：account_srv/file_srv/AI_srv/mcp_server/store_srv -> gRPC/HTTP/Kafka consumer
+C++ Gateway：CMake -> Drogon + gRPC stubs + Consul/curl -> HTTP :38080
+前端：Vite dev/build -> browser -> OpenResty/Gateway APIs
+调试闭环：配置中心 -> 基础设施连接 -> 服务注册 -> Gateway 发现 -> gRPC 调用 -> 存储/扫描
+```
+
+本章所有命令都要按“验证哪一层”理解，而不是机械执行。
+
+## Go 后端
+
+模块路径在 `go.mod`，服务分散在 `backword_part/` 和 `other_srv/`。`go.mod` 直接反映了每个服务依赖哪些中间件：Kafka（sarama）、MinIO、Nacos、Consul、Redis、MySQL（gorm）、JWT、MCP（mcp-go）。
+
+代码证据：`go.mod`
+
+```go
+module go_test
+
+go 1.24.0
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+)
+```
+
+常用命令：
+
+```bash
+go build -o bin/account_srv ./backword_part/account_server/account_srv/
+go build -o bin/file_srv ./backword_part/file_server/file_srv/
+go build -o bin/ai_srv ./backword_part/AI_server/
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+go vet ./...
+```
+
+解释：
+
+- module 名是 `go_test`（不是 clouddisk_v2），所有 import 前缀按此写，例如 `go_test/backword_part/file_server/file_srv/protobuf`。
+- 每个服务是独立 main 包、独立进程；除了五个服务外没有别的可执行入口。
+- `go test ./...` 会遍历全部包；`go vet ./...` 做静态检查。
+- 直接 `go run` 也能跑（`start_all.sh` 就是这么启动的），但输出和日志文件要自己接好。
+
+## 前端
+
+`forward_part/static/package.json` 定义 Vite/React 命令。脚本只有三个：dev/build/preview；运行时依赖只有 react 和 react-dom。
+
+代码证据：`forward_part/static/package.json`
+
+```json
+"scripts": {
+  "dev": "vite",
+  "build": "vite build",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+命令：
+
+```bash
+cd forward_part/static
+npm install
+npm run dev       # 开发服务器 :3000
+npm run build     # 产物到 dist/
+npm run preview   # 本地预览构建产物
+```
+
+解释：
+
+- dev 服务器默认 3000 端口；生产环境静态文件由 OpenResty 直接 serve `dist/`（nginx.conf 的 `root .../forward_part/static/dist`），不经 Vite。
+- `npm run preview` 只用于本地验证构建产物，真实部署走 nginx。
+- 样式走 tailwind，构建走 Vite 6，TypeScript ~5.8。
+
+## C++ Gateway
+
+`forward_part/gateway/CMakeLists.txt` 是构建入口。它先探测编译器支持情况决定 C++ 标准（20/17/14），再逐个 `find_package` Drogon/Protobuf/gRPC/CURL/spdlog/fmt，并把三个 proto 目录的生成代码（.pb.cc/.grpc.pb.cc）直接编进 target。
+
+代码证据：`forward_part/gateway/CMakeLists.txt`
+
+```cmake
+if (NOT "${CMAKE_CXX_STANDARD}" STREQUAL "")
+    # Do nothing
+elseif (HAS_ANY AND HAS_STRING_VIEW AND HAS_COROUTINE)
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+endif ()
+```
+
+```cmake
+find_package(Drogon CONFIG REQUIRED)
+find_package(Drogon REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
+```
+
+proto 生成代码被显式列出编入，controller/filter/plugin/model 目录则用 `aux_source_directory` 自动收集：
+
+代码证据：`forward_part/gateway/CMakeLists.txt`
+
+```cmake
+# gRPC/protobuf generated sources for file service client
+set(FILE_PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/file_srv)
+set(FILE_PROTO_SRCS
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+           ${AI_PROTO_SRCS})
+```
+
+构建：
+
+```bash
+cd forward_part/gateway
+mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+ctest --output-on-failure
+```
+
+解释：
+
+- 依赖必须"存在"才能编过：Drogon/gRPC 走 `find_package`，librdkafka 用 `find_path/find_library`，`nacos-cli` 找不到只 warning（见 18 章坑点 10）。
+- 新增 controller 无需改 CMakeLists——`aux_source_directory(controllers CTL_SRC)` 自动收源文件。
+- 生成代码直接编译进 target：proto 修改后需要重新执行 protoc 生成 .pb.cc/.grpc.pb.cc，再重新 cmake/make。
+- 构建产物是 `forward_part/gateway/build/gateway`，`start_all.sh` 的 `build_cpp_gateway` 就是复用这条命令。
+
+## C++ Email Service
+
+`other_srv/email_srv/CMakeLists.txt` 是构建入口。它按 C++17 编译，依赖 CURL（HTTP）、Threads、fmt、librdkafka（Kafka 消费）、hiredis（Redis）、Nacos SDK。
+
+代码证据：`other_srv/email_srv/CMakeLists.txt`
+
+```cmake
+find_package(CURL REQUIRED)
+find_package(Threads REQUIRED)
+find_package(fmt REQUIRED)
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+endif()
+```
+
+构建：
+
+```bash
+cd other_srv/email_srv && mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+```
+
+解释：
+
+- 与 gateway 不同，email_srv 的 librdkafka/hiredis 缺失直接 `FATAL_ERROR` 而不是 warning——这两个依赖是硬性的。
+- Nacos SDK 仍然可选（缺失只 warning），因为 C++ 侧可以退化为本地配置。
+- 该服务通过 Kafka 消费文件事件做邮件通知，不在 gateway 转发链路里，排障时单独看它的日志。
+
+## 配置与基础设施
+
+Go 服务很多全局 client 在 init 链路里依赖配置中心，因此本地运行前必须准备 Nacos/Redis/MySQL/Kafka/MinIO/Consul 等基础设施。`start_all.sh` 的第一件事就是检查基础设施（`check_infrastructure`），端口硬编码在脚本里：
+
+代码证据：`scripts/project_start_scripts/start_all.sh`
+
+```bash
+# 检查 Nacos
+if nacos_health_ok; then
+    echo -e "${GREEN}  ✓ Nacos (127.0.0.1:30848)${NC}"
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+if http_health_ok "http://127.0.0.1:30900/minio/health/live"; then
+```
+
+Nacos 配置通过 `scripts/import-nacos-config.sh` 导入：直接写 Nacos 的 MySQL 元数据库（`config_info` 表），避免依赖 Nacos 3.x 已废弃的旧接口；导入后可自动 `rollout restart` Nacos 刷新内存缓存。
+
+代码证据：`scripts/import-nacos-config.sh`
+
+```bash
+INSERT INTO config_info (
+    data_id, group_id, content, md5, src_user, src_ip, app_name, tenant_id, type
+) VALUES (
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+    ...
+```
+
+启动顺序由 `start_all.sh` 的 main 函数固定：基础设施 → 依赖 → 反代 → 网关 → Go 服务 → 前端。
+
+代码证据：`scripts/project_start_scripts/start_all.sh`
+
+```bash
+main() {
+    reconcile_k8s_runtime
+    check_infrastructure
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- 基础设施端口映射是固定的：Nacos 30848 / Consul 30500 / MySQL 30306 / Redis 31029 / Kafka 31092 / MinIO 30900。
+- `import-nacos-config.sh` 需要 MySQL 客户端（本机 `mysql` 或 kubectl exec 进 MySQL pod 二选一）；namespace/data_id/group 都可用环境变量覆盖。
+- Go 服务用 `go run` 直接启动，日志写到 `log/<服务名>.log`，PID 写到 `.pids/<服务名>.pid`。
+- 前端日志 `log/frontend.log`、网关日志 `log/gateway.log`，实时查看用 `tail -f log/*.log`。
+
+## 分片上传测试
+
+`test/mputest.go` 是 multipart 主链路测试工具：支持断点续传（本地状态文件）、并行分片、模拟中断。它按 `InitMultipart → Status → PresignParts → 预签名 PUT → CompleteMultipart` 顺序驱动，与前端 UploadManager 的行为一致。
+
+代码证据：`test/mputest.go`
+
+```go
+var (
+	addr        = flag.String("addr", "127.0.0.1:50051", "grpc address")
+	filePath    = flag.String("file", "", "path to big file")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+)
+```
+
+分片数据是直接对预签名 URL 发 HTTP PUT，返回的 ETag 用于 CompleteMultipart：
+
+代码证据：`test/mputest.go`（uploadPresignedPart）
+
+```go
+req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, io.NewSectionReader(f, offset, size))
+if err != nil {
+	return "", err
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+return resp.Header.Get("ETag"), nil
+```
+
+命令：
+
+```bash
+go run test/mputest.go -addr 127.0.0.1:50051 -file ./big.bin -user_id 1001 -parallel 4
+```
+
+解释：
+
+- 状态文件是 `<file>.upload_state.json`，`-resume` 默认开启：重跑时先调 `Status` 找出已上传分片，只补传缺失部分。
+- `-stop_after N` 模拟"传到一半退出"，配合 resume 可以验证 Status 断点续传逻辑。
+- 测试工具直连 gRPC 拿预签名 URL，再直连 MinIO PUT 分片——它绕过 gateway 和 OpenResty，适合单独验证 file_srv 分片链路。
+
+## 性能测试
+
+`test/perf_test.sh` 是 curl 驱动的简单压测：按 QPS×时长算出总请求数，多 worker 并发打目标 URL，收集 HTTP 状态码和耗时。
+
+代码证据：`test/perf_test.sh`
+
+```bash
+Usage: ./scripts/perf_test.sh -u <url> [-m METHOD] [-d SECONDS] [-q QPS] [-c CONCURRENCY] [-H HEADER] [-p DATA_FILE]
+
+Options:
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+  -p DATA_FILE      Payload file (for POST/PUT/PATCH)
+```
+
+worker 用 curl 的 `-w "%{http_code} %{time_total}"` 输出状态码和耗时：
+
+代码证据：`test/perf_test.sh`
+
+```bash
+build_curl_cmd() {
+  local cmd=(curl -s -o /dev/null -w "%{http_code} %{time_total}\n" -X "$METHOD")
+  for h in "${HEADERS[@]}"; do
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+命令：
+
+```bash
+./perf_test.sh -u http://localhost:8080/health -d 15 -q 200 -c 20
+```
+
+解释：
+
+- QPS 是目标值：脚本按 `TOTAL=$((QPS * DURATION))` 算出总请求数再分给 worker，不是持续灌压。
+- `-H` 可重复传入，压需要鉴权的接口时带 `Authorization: Bearer <token>`。
+- 注意压测目标端口：8080 是 gateway 直连端口，2024 是 OpenResty 入口，两者测出的链路范围不同。
+
+## 常见误判与排障顺序
+
+- 误判：`go test ./...` 失败一定是业务代码问题。正确理解：本项目很多包在 init 阶段依赖 Nacos/MySQL/Redis/MinIO 等基础设施，先确认配置和外部服务。
+- 误判：Gateway 起了就能调用所有服务。正确理解：还要看 Consul 注册、健康检查、Gateway `FindService` 缓存和 gRPC channel/stub 是否可用。
+- 误判：前端 build 通过就代表功能可用。正确理解：运行态还依赖 OpenResty/Gateway/API 地址、JWT、CORS 和预签名 URL rewrite。
+- 误判：上传成功后不可下载就是上传失败。正确理解：还要查 Outbox/Kafka/store scan/ClamAV 是否把状态推进到 `success`。
+
+推荐排障顺序：
+
+```text
+1. Nacos 配置是否能读到，clouddisk.json 字段是否完整。
+2. MySQL/Redis/Consul/Kafka/MinIO/ClamAV 是否可连接。
+3. Go 服务是否启动并注册到 Consul，health check 是否健康。
+... 省略非关键行，保留完整路径/锚点见上文 ...
+7. 前端是否正确保存 token、发送 Authorization、处理 pending_scan 轮询和 URL rewrite。
+```
+
+## 状态转换
+
+构建和调试本身也有状态推进，不能只看“命令有没有执行”。
+
+```text
+配置未就绪 -> Nacos clouddisk.json 可读 -> ViperConf 初始化成功
+基础设施未连通 -> MySQL/Redis/Consul/Kafka/MinIO/ClamAV 健康 -> 服务可启动
+服务进程启动 -> Consul 注册成功 -> Gateway FindService 可发现
+Gateway 可发现 -> gRPC 调用成功 -> 业务 API 返回 code/message
+文件上传完成 -> Outbox/Kafka/store scan 收敛 -> File.status=success -> 前端可下载/预览
+```
+
+调试时每一步都要找到对应证据：配置文件、启动日志、健康检查、Consul 服务列表、gRPC 响应、DB 状态或前端 UI 状态。不能用下游结果反推上游一定正确。
+
+## 关键数据结构 / 字段
+
+- `go.mod module go_test`：Go import 路径和服务构建入口的基础。
+- `ViperConf`：所有 Go 服务共享的配置结构，决定基础设施连接参数。
+- `Consul service name`：Gateway `FindService("file_srv"/"account_srv"/"AI_srv")` 能否发现后端的关键。
+- `X-Request-Id`：跨前端、OpenResty、Gateway、gRPC、Kafka、store service 的调试关联字段。
+- `File.status`：上传后能否下载/预览的最终业务证据。
+- `Outbox/Inbox/DLQ status`：异步扫描是否卡住的核心排障字段。
+
+## 调试优先级
+
+排障按依赖方向从外到内：先配置中心，再服务发现，再网关，最后业务链路。`start_all.sh` 内置了针对 Nacos/Consul 的根因诊断，`status.sh` 提供每个服务的 PID/内存/日志尾部。
+
+代码证据：`scripts/project_start_scripts/start_all.sh`（diagnose_nacos）
+
+```bash
+local nacos_logs
+nacos_logs=$(kubectl logs -n "$K8S_NAMESPACE" deployment/nacos --tail=80 2>/dev/null || true)
+if echo "$nacos_logs" | text_matches "Unknown database 'nacos_config'|db-load-error"; then
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+    echo -e "      mysql -h127.0.0.1 -P30306 -uroot -p123456 < $NACOS_SQL"
+```
+
+`status.sh` 每个服务读 `.pids/<name>.pid`，进程不在时用 fallback 端口兜底找回 PID，并打印日志尾部：
+
+代码证据：`scripts/project_start_scripts/status.sh`
+
+```bash
+case "$service_name" in
+    gateway) fallback_port="38080" ;;
+    frontend) fallback_port="3000" ;;
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+    fi
+```
+
+调试优先级：
+
+1. 先确认 Nacos 配置能读到（`import-nacos-config.sh` 导入成功 + Go 服务日志无配置错误；Nacos 起不来的常见根因是 MySQL 元库未初始化，脚本直接给出修复命令）。
+2. 再确认 Consul 注册和健康检查（`http://127.0.0.1:30500/ui`，服务名 account_srv/file_srv/AI_srv/mcp_srv；Consul 起不来的常见根因是数据目录过旧触发 `server_rejoin_age_max`，开发环境可删 PVC 重来）。
+3. 再查 Gateway 能否发现 gRPC 服务（gateway 缓存 TTL 10 秒，Consul 查询失败会 fallback 到 stale cache）。
+4. 文件上传问题按 OpenResty buffering、Drogon stream、file service、MinIO、Outbox、store scan 顺序排查。
+
+## 阅读检查
+
+- 能说明每条构建命令验证的是哪个服务入口，而不是只会复制命令。
+- 能列出本地启动最小依赖：Nacos、Consul、Redis、MySQL、Kafka、MinIO、ClamAV。
+- 能解释为什么 Gateway 启动成功不代表 gRPC 后端可调用。
+- 能按配置中心 -> 基础设施 -> 服务注册 -> Gateway 发现 -> gRPC -> 存储/扫描的顺序排障。
+- 能说明上传后不可下载时要查 `File.status`、Outbox、Kafka、Inbox、DLQ 和 store service 日志。
+
+解释：
+
+- 启动脚本的检查顺序本身就是排障顺序：基础设施 → 依赖 → 反代 → 网关 → Go 服务 → 前端。
+- `status.sh` 会列出常用端口 2024/3000/3001/8080/50051/50052 的监听情况，快速定位"哪个服务根本没起来"。
+- 每个服务日志在 `log/<name>.log`，`status.sh` 尾部三行就是最近的报错线索。

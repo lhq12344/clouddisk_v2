@@ -1,0 +1,427 @@
+# 14. 对象存储层：MinIO 与 AliOSS
+
+## 本章定位
+
+对象存储保存文件内容（对象本体），MySQL 保存元数据和关系（File/UserFile 表）。当前主链路以 MinIO 为主：小文件上传、multipart、下载、病毒扫描读取全部围绕 `internal.MinIOClient` 展开。AliOSS 在 `internal/ali_oss.go` 里有完整 client 封装，但全代码库没有任何业务调用点，学习时应把它视为扩展/备用实现，不是当前主路径。
+
+## 总链路
+
+对象存储层在不同业务场景里的位置不同：
+
+```text
+小文件上传：file_srv.UploadFile -> MinIOUploadStream(PutObject) -> File/UserFile -> Outbox scan
+分片上传：InitMultipart -> MinIOMultipartInit -> PresignParts -> PUT part -> ListParts -> CompleteMultipart
+下载/预览：file_srv owner/status 校验 -> MinIOPresignGetURLWithParams -> browser download/preview/fetch
+病毒扫描：store_srv -> MinIOGetObjectStream -> ClamAV -> success/infected/scan_failed
+备用扩展：AliOSS client 已封装，但当前主链路没有业务调用点
+```
+
+这条链路说明：MinIO 是当前文件字节主存储；MySQL 只保存元数据和状态；AliOSS 是可扩展实现，不是当前上传/下载/扫描主链路。
+
+`internal/minio.go` 的全局入口是 `MinIOClient`（`MINIOClient` 结构体 = 原始 minio-go client + bucket 名），由 `InitMinio()` 在配置加载阶段创建。
+
+代码证据：`internal/minio.go`
+
+```go
+type MINIOClient struct {
+	Client *minio.Client
+	Bucket string
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+var MinIOClient *MINIOClient
+```
+
+代码证据：`internal/minio.go`（InitMinio 入口，L330-347）
+
+```go
+func InitMinio() {
+	region := strings.TrimSpace(ViperConf.MinIO.Region)
+	if region == "" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `MINIOClient` 把"连接 + bucket 名"打包成一个全局单例，业务代码不用关心 host/port/accessKey，只传 `objectKey`。
+- 配置来自 Nacos → `ViperConf.MinIO`（见 `internal/minio.go` 的 `MinioConf` 结构体），region 缺省为 `us-east-1`。
+- 初始化失败直接 `panic`——对象存储是不可降级的核心依赖，起不来就拒绝启动。
+- `InitMinio()` 与 `InitAli()` 在 `internal/viper_config_centre.go` 的同一个初始化块里先后执行，但业务代码只消费 `MinIOClient`。
+
+## Object Key
+
+`backword_part/file_server/file_srv/protobuf/file.go` 的 `buildObjectKey(fileHash)` 生成 `files/<hash>` 形式的 key。key 由内容 hash 决定，不包含用户文件名，所以相同内容的文件（不同用户、不同文件名）会命中同一个对象——这是整个去重设计的基础。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（buildObjectKey，L57-59）
+
+```go
+func buildObjectKey(fileHash string) string {
+	return fmt.Sprintf("files/%s", strings.TrimSpace(fileHash))
+}
+```
+
+读取侧（下载/预览/扫描）不直接信任数据库里存的 key，而是通过 `resolveStoredObjectKey` 统一解析：优先用 `file.ObjectKey`，为空时用 `sha1` 重新构造。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（resolveStoredObjectKey，L448-459）
+
+```go
+func resolveStoredObjectKey(file *model.File) string {
+	if file == nil {
+		return ""
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `files/` 前缀是对象命名空间，避免与其它用途的对象混在一起；store service 的 `normalizeObjectKey` 在事件 payload 缺 key 时也用同样的 `"files/" + sha1` 兜底（`other_srv/store_srv/kafka/kafkacunsumer.go`）。
+- 同一个 hash 只产生一个对象，但 MySQL 里可以有多个 `UserFile` 行指向同一个 `File` 行——对象层去重，元数据层多对一。
+- `buildObjectKey` 的入参是 `fileHash`（sha1），不是用户上传时的原始文件名，所以"重命名文件"不会产生新对象。
+
+## MinIO 能力
+
+`internal/minio.go` 把 minio-go SDK 封装成一组 `MinIO*` 方法族，覆盖 bucket 管理和对象全生命周期：
+
+| 能力 | 方法 | 底层 SDK 调用 |
+| --- | --- | --- |
+| bucket 幂等创建 | `NewMinIOOSSClient` | `BucketExists` / `MakeBucket` |
+| 小文件流式上传 | `MinIOUploadStream` | `PutObject` |
+| 本地文件上传/下载 | `MinIOUploadFile` / `MinIODownloadFile` | `FPutObject` / `FGetObject` |
+| 对象存在性/元信息 | `MinIOObjectExists` / `MinIOGetObjectMeta` | `StatObject` |
+| 删除对象 | `MinIODeleteObject` | `RemoveObject` |
+| 预签名 GET | `MinIOPresignGetURL` / `MinIOPresignGetURLWithParams` | `PresignedGetObject` |
+| 预签名 PUT | `MinIOPresignPutURL` | `PresignedPutObject` |
+| multipart 初始化 | `MinIOMultipartInit` | `Core.NewMultipartUpload` |
+| part 预签名 PUT | `MinIOPresignMultipartPutURL` | `Client.Presign(PUT)` |
+| 直传 part（内部用） | `MinIOMultipartPutPart` | `Core.PutObjectPart` |
+| complete | `MinIOMultipartComplete` | `Core.CompleteMultipartUpload` |
+| abort | `MinIOMultipartAbort` | `Core.AbortMultipartUpload` |
+| 列出已上传 part | `MinIOMultipartListParts` | `Core.ListObjectParts` |
+| 读取对象流（供扫描） | `MinIOGetObjectStream` | `Core.GetObject` |
+
+客户端创建时对 endpoint 做了两种写法兼容（`http(s)://host:port` 或 `host:port`），并确保 bucket 存在。
+
+代码证据：`internal/minio.go`（NewMinIOOSSClient，L58-98 节选）
+
+```go
+func NewMinIOOSSClient(endpoint, accessKey, secretKey, bucketName string, useSSL bool, region string) (*MINIOClient, error) {
+	// endpoint 既支持 "http(s)://host:port" 也支持 "host:port"
+	host, inferredSSL, err := normalizeEndpoint(endpoint)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 静态 key（`NewStaticV4`）直接写在配置里，没有 STS 换临时凭证——这是开发/内部环境的简化。
+- bucket 创建是幂等的：`MakeBucket` 失败后再 `BucketExists` 确认一次，容忍多实例并发启动同时建桶。
+- 方法族的两个风格：面向对象内容 IO 的直接方法（Put/Get/Remove/Stat）走 `c.Client`；multipart 底层操作走 `minio.Core`（Core 暴露了 S3 协议级别的 multipart 原语）。
+
+## 小文件路径
+
+小文件上传在 `UploadFile`（gRPC client-streaming）里把 stream 接到 MinIO 上传：第一个消息必须是 `meta`，后续消息是 `data` 块。服务端不先把数据攒在内存/磁盘，而是用 `io.Pipe` 把 goroutine 里的 `MinIOUploadStream` 与主循环里的 `stream.Recv()` 对接起来，边收边传。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（UploadFile 主流程，L688-705）
+
+```go
+objectKey := buildObjectKey(meta.FileHash)
+pipeReader, pipeWriter := io.Pipe()
+uploadResultCh := make(chan uploadObjectResult, 1)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}()
+```
+
+接收循环把每个 data 帧写进 pipe；所有帧收完后关闭 pipe，等待 goroutine 的上传结果，并校验实际写入字节数等于 meta 里声明的 `FileSize`。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（UploadFile 收流与收尾，L707-746）
+
+```go
+var written int64
+for {
+	msg, recvErr := stream.Recv()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`MinIOUploadStream` 本身是 `PutObject` 的一层薄封装：带 nil 保护、默认 content type，并把用户元数据（文件名/hash/user id）作为对象 UserMetadata 写入。
+
+代码证据：`internal/minio.go`（MinIOUploadStream，L107-125）
+
+```go
+func (c *MINIOClient) MinIOUploadStream(
+	ctx context.Context,
+	reader io.Reader,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+对象上传成功后，`upsertFileAndRelation` 在数据库事务里落 `File`（status=pending_scan）+ `UserFile` 关系并写 outbox；如果落库失败，服务端会立刻把刚上传的对象删掉，避免留下孤儿对象。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（UploadFile 落库与失败回滚，L748-761）
+
+```go
+file, _, err := upsertFileAndRelation(ctx, account, meta.UserId, meta.FileName, meta.FileHash, meta.ContentType, objectKey, meta.FileSize, false)
+if err != nil {
+	_ = internal.MinIOClient.MinIODeleteObject(objectKey)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 先传对象、后写元数据：对象是"事实"，MySQL 只是索引；反过来写会留下"有记录没对象"的脏数据。
+- `io.Pipe` 是流式对接的关键：gRPC stream 的节奏由对端控制，MinIO 上传的节奏由网络控制，pipe 缓冲二者，避免整文件驻留内存。
+- `meta.FileSize` 必须与 `written` 一致，防的是客户端谎报大小导致的元数据错位。
+- UserMetadata（`x-file-name` 等）随对象存储，store service 扫描后回填元数据时也可参考。
+- 该路径在 `file.go:634` 之前还有一条去重分支：hash 已存在时直接 `drainUploadFileStream` 丢弃数据流并复用已有对象，不产生第二次上传。
+
+## 分片路径
+
+multipart 的控制面全部是普通 gRPC RPC：`InitMultipart` 先算出分片方案并创建 MinIO upload id，然后把整个会话的元信息存进 Redis（key = `metaKey(uploadID)`）；前端随后用 `PresignParts` 拿预签名 PUT URL 直传各 part；`CompleteMultipart` 校验 part 齐全后合并对象并落库。
+
+`InitMultipart` 用 `minio.OptimalPartInfo` 计算 part size，然后生成两层 upload id：`uploadID` 是 file service 自己生成的会话 id（`genUploadID`，存 Redis），`ossUploadID` 是 MinIO 侧真正的 upload id（存进 Redis 的 `oss_upload_id` 字段）。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（InitMultipart，L993-1014）
+
+```go
+totalParts, partSize, _, err := minio.OptimalPartInfo(req.FileSize, 0)
+if err != nil {
+	return nil, status.Errorf(codes.Internal, "OptimalPartInfo: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+会话元信息用 Redis pipeline 一次性写入并带 TTL（`defaultTTL`）；写 Redis 失败时 abort MinIO 侧的 multipart，保证两侧都不留残骸。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（InitMultipart 存 Redis meta，L1016-1034）
+
+```go
+if _, err := internal.RedisClient.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	pipe.HSet(ctx, metaKey(uploadID), map[string]any{
+		"user_id":       req.UserId,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`PresignParts` 先从 Redis 读出会话 meta，校验当前 gRPC 用户就是会话 owner（`ensureMultipartOwner`，读 `x-user-id` metadata），再逐 part 生成预签名 PUT URL。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（PresignParts，L1051-1086 节选）
+
+```go
+vals, err := internal.RedisClient.HMGet(ctx, metaKey(req.UploadId), "user_id", "object_key", "oss_upload_id", "total_parts").Result()
+if err != nil {
+	return nil, status.Errorf(codes.Internal, "redis HMGet meta: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+return resp, nil
+```
+
+`MinIOPresignMultipartPutURL` 走 S3 协议：给对象 PUT 请求附加 `partNumber` 和 `uploadId` 两个 query 参数后签名。
+
+代码证据：`internal/minio.go`（MinIOPresignMultipartPutURL，L190-207）
+
+```go
+func (c *MINIOClient) MinIOPresignMultipartPutURL(
+	ctx context.Context,
+	objectKey, uploadID string,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`CompleteMultipart` 是收敛点：已 complete 的会话（Redis `status=completed`）幂等返回当前文件状态；否则从 MinIO 列出已上传 part，数量对不上返回 `FailedPrecondition`，对得上就用 `partNumber + ETag` 列表调 `MinIOMultipartComplete` 合并对象，再落库、写 outbox、把会话标记为 completed。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（CompleteMultipart，L1119-1177 节选）
+
+```go
+if statusStr == "completed" {
+	currentStatus := model.FilePendingScan
+	if file, err := findFileByHash(ctx, fileHash); err == nil && file != nil && file.Status != "" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`Status`（断点恢复用）和 `AbortMultipart` 是对同一份 Redis meta 的读/清理：`Status` 列出已上传 part 号回给前端；`Abort` 对未 completed 的会话调用 `MinIOMultipartAbort` 后删 Redis key。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（Status 与 AbortMultipart 节选，L1204-1243）
+
+```go
+if statusStr != "completed" && objectKey != "" && ossUploadID != "" {
+	_ = internal.MinIOClient.MinIOMultipartAbort(ctx, objectKey, ossUploadID)
+}
+_ = internal.RedisClient.Del(ctx, metaKey(req.UploadId)).Err()
+return &AbortResp{}, nil
+```
+
+```go
+parts, err := listUploadedParts(ctx, objectKey, ossUploadID)
+if err != nil {
+	return nil, status.Errorf(codes.Internal, "list multipart parts: %v", err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}, nil
+```
+
+解释：
+
+- 会话状态机存在 Redis 而不是 MySQL：multipart 是高频、短生命周期会话，天然匹配 Redis，且 `defaultTTL` 到期自动清理过期会话。
+- 两层 upload id 是解耦点：`upload_id`（Redis key 的一部分）对前端可见；`oss_upload_id` 对 MinIO 可见。前端永远碰不到 MinIO 原始 id。
+- `ensureMultipartOwner` 通过 gRPC 传入的 `x-user-id` metadata（gateway 从 JWT 注入）校验所有权，防止用户操作别人的上传会话。
+- `MinIOMultipartComplete` 内部会按 `PartNumber` 升序排序 parts（见 `internal/minio.go` L276），S3 协议要求合并列表必须升序。
+- gRPC 流式 `UploadPart` 已经是 `codes.Unimplemented`（file.go L1089-1091），真实主链路是 `PresignParts + 直传 MinIO`。
+
+## 下载与预览：预签名 GET URL
+
+下载/预览不把对象内容流经 file service，而是签发带 `response-content-disposition` 参数的预签名 GET URL 交给前端直连 MinIO。`Filedowm`（下载，attachment）与 `Showfile`（预览，inline）逻辑几乎相同，差别只在 disposition 类型。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（Filedowm，L599-627 节选）
+
+```go
+uf, err := findOwnedUserFile(ctx, account.ID, req.Filename, req.Filehash)
+if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+return &Resp{Code: 0, Message: u}, nil
+```
+
+`buildPresignedGetURL` 把 `response-content-disposition` / `response-content-type` 作为签名参数传给 MinIO，这样浏览器直接访问 URL 时得到的文件名就是服务端指定的（而非 `files/<hash>` 这种无意义名字），且无需服务端代理转发。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file.go`（buildPresignedGetURL，L89-98）
+
+```go
+func buildPresignedGetURL(objectKey, filename, contentDisposition, contentType string) (string, error) {
+	reqParams := make(url.Values)
+	if contentDisposition != "" {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 下载 URL 有效期 10 分钟（`10*time.Minute`），过期即失效，防止 URL 外泄后无限期可访问。
+- `attachment` 与 `inline` 两种 disposition 由 `buildAttachmentContentDisposition` / `buildInlineContentDisposition` 构造（file.go L61-73），且对文件名做了引号、换行清洗，避免 header 注入。
+- 只有 `status == FileSuccess`（扫描通过）才能拿到签名 URL；`pending_scan`/`infected` 返回 409 和 `fileUnavailableMessage` 的解释文案。
+- 这个"签名后直连"模式让对象流不经过应用层，MinIO 承担全部带宽。
+
+## 扫描读取路径
+
+store service 的消费者从 Kafka 收到上传完成事件后，从 MinIO 以流式方式读取对象内容（`MinIOGetObjectStream`），喂给 ClamAV 扫描——全程不落本地磁盘。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go`（scanObject，L305-325）
+
+```go
+func (c *FileUploadConsumer) scanObject(ctx context.Context, objectKey string, objectSize int64) (signature string, infected bool, err error) {
+	if c.ossClient == nil {
+		return "", false, fmt.Errorf("%w: minio client not initialized", ErrServiceUnavailable)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+`MinIOGetObjectStream` 用 `Core.GetObject` 返回原始 `io.ReadCloser`（不是下载到文件），`ScanReaderWithClamAV` 则按 ClamAV 的 INSTREAM 协议把流分块发送：`nINSTREAM` 命令 + 多个 `[4 字节大端长度][数据块]` + 零长度终止，然后读回 verdict。
+
+代码证据：`internal/minio.go`（MinIOGetObjectStream，L318-328）
+
+```go
+func (c *MINIOClient) MinIOGetObjectStream(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	if c == nil || c.Client == nil {
+		return nil, fmt.Errorf("minio client is nil")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`other_srv/store_srv/kafka/clamav.go`（ScanReaderWithClamAV 协议发送，L110-146 节选）
+
+```go
+if _, err := conn.Write([]byte("nINSTREAM\n")); err != nil {
+	return nil, classifyClamAVWriteError(conn, timeout, "send clamd command", err)
+}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+return parseClamAVReply(reply)
+```
+
+扫描结论决定对象去留：clean 则事务里把 File 置为 `success` 并清空 scan_detail；infected 则先删对象（幂等容忍 NoSuchKey），再置为 `infected` 并记录病毒签名。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go`（finalizeClean / finalizeInfected，L327-370 节选）
+
+```go
+func (c *FileUploadConsumer) finalizeClean(ctx context.Context, payload *model.FileEventPayload) error {
+	now := time.Now()
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 扫描是流式的：对象内容从 MinIO 读一个 chunk 立刻发一个 chunk 给 clamd，32KB 缓冲，峰值内存与文件大小无关。
+- 超时统一由 `ViperConf.ClamAV.Timeout()` 控制；对象大小超过 `EffectiveStreamLimitBytes` 直接判失败（`ErrFileTooLarge`），避免超大文件打爆 clamd。
+- 消息最终要么 commit（clean/infected/scan_failed 收敛），要么重试/进 DLQ——对象层只有两个副作用动作：读流（scanObject）和删对象（finalizeInfected），由 Inbox 幂等保护不重复执行。
+- 删除对象用 `MinIODeleteObject` 且容忍 `NoSuchKey`，因为对象可能已被其它路径清掉。
+
+## AliOSS 边界
+
+`internal/ali_oss.go` 定义了阿里云 OSS 的封装：`OSSClient`（oss.Client + oss.Bucket 双指针）、`NewOSSClient` 工厂，以及 `UploadFile/UploadBytes/ObjectExists/DeleteObject/GetObjectMeta/DownloadFile` 等方法族。`UploadFile` 用的是 OSS SDK 的高层断点续传 API（分片 1MB、3 并发、本地 checkpoint 文件）。
+
+代码证据：`internal/ali_oss.go`（OSSClient 与 UploadFile，L17-40）
+
+```go
+type OSSClient struct {
+	Client *oss.Client
+	Bucket *oss.Bucket
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+它和 MinIO 一起在配置加载阶段初始化，但没有任何业务模块引用 `OssClient` 的方法——初始化是热的，使用是冷的。
+
+代码证据：`internal/viper_config_centre.go`（配置加载初始化块，L161-168）
+
+```go
+// 6. 初始化模块
+InitRedis()
+Initdb()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+Logger.Info("All services initialized")
+```
+
+解释：
+
+- `OssClient` 是"能跑但没有被调用"的封装：全代码库（`backword_part/`、`other_srv/`、`internal/`）只有 `ali_oss.go` 自身和 `viper_config_centre.go` 的 `InitAli()` 提到它，没有任何上传/下载/扫描路径调用 `OssClient` 方法。
+- `UploadFile` 的 checkpoint 参数（`./checkpoint`）是 OSS SDK 的断点续传持久化，适合把本地大文件搬运到 OSS 的运维场景，不是浏览器上传链路的组件。
+- 结论：学习时把 `ali_oss.go` 当作"对象存储抽象的第二实现模板"即可；当前 09/11/13 章描述的主链路全部围绕 `MinIOClient`。
+
+## 状态与边界转换
+
+对象存储自身不维护业务状态，业务状态由 file service 和 store service 写 MySQL；MinIO 只提供对象事实。
+
+```text
+PutObject 成功 -> object stored -> MySQL File.status=pending_scan
+Multipart complete 成功 -> object merged -> MySQL File.status=pending_scan
+Presigned GET 生成 -> 临时 URL 可访问 -> 过期后需要重新向 file service 申请
+... 省略非关键行，保留完整路径/锚点见上文 ...
+扫描失败 -> object 可能仍存在 -> File.status=scan_failed，禁止签下载/预览 URL
+```
+
+边界要点：MinIO 不知道用户是谁，也不知道文件是否安全；用户归属和安全门禁都在 MySQL/Gateway/file service/store service 中完成。
+
+## 关键数据结构 / 字段
+
+- `object_key`：MinIO 对象地址，通常由 hash 构造成 `files/<hash>`。
+- `bucket`：MinIOClient 持有的存储桶名，由 Nacos/Viper 配置初始化。
+- `userMeta`：上传对象时写入的辅助 metadata，如文件名、hash、user id。
+- `upload_id / oss_upload_id`：multipart 业务会话 id 与 MinIO 原始 upload id 的分离。
+- `ETag / PartNumber`：multipart complete 所需的对象存储事实。
+- `File.status`：不在 MinIO 内，由 MySQL 保存，是下载/预览门禁。
+
+## 常见误判与排障顺序
+
+- 误判：对象存储保存业务权限。正确理解：MinIO 只保存字节，权限由业务服务签 URL 前校验。
+- 误判：文件名就是 object key。正确理解：object key 基于 hash，文件名在 `UserFile` 关系里。
+- 误判：AliOSS 是当前主链路。正确理解：当前上传、multipart、下载、扫描证据都指向 `MinIOClient`。
+- 排障顺序：Nacos MinIO 配置 -> `InitMinio` 是否成功 -> bucket 是否存在 -> object_key 是否正确 -> Put/Get/ListParts/Complete 是否成功 -> MySQL 状态是否同步。
+
+## 阅读检查
+
+- 能说明 object key 为什么基于 hash（`files/<hash>`），以及相同 hash 复用对象时元数据层如何多对一。
+- 能区分元数据 DB（File/UserFile 表）和对象存储（MinIO bucket）各自的职责与一致性问题（先传对象、后落库、失败删对象）。
+- 能列出 MinIO 在小文件（PutObject + pipe 流式）、分片（Core 系 multipart 原语）、下载（预签名 GET + content-disposition）、扫描（GetObject stream → ClamAV INSTREAM）中的不同 API 角色。
+- 能解释 multipart 会话的两层 upload id 与 Redis 状态机，以及 `ensureMultipartOwner` 为什么必要。
+- 能指出 `UploadPart` gRPC 流式接口已废弃，真实主链路是 `PresignParts + 预签名 PUT 直传`。
+- 能说明为什么只有 `success` 状态的文件才能拿到下载/预览签名 URL，以及 URL 为什么只有 10 分钟有效期。
+- 能说出 AliOSS 与 MinIO 的实际地位差异：AliOSS 有完整封装但无业务调用点，MinIO 是唯一主链路。

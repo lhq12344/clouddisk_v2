@@ -1,0 +1,317 @@
+# 03. 网关层：Drogon Gateway 的职责、缓存和 gRPC 转发
+
+## 本章定位
+
+Drogon Gateway 是 HTTP 应用网关。OpenResty 只负责最外层入口和反向代理；Drogon 负责真正的 HTTP 路由、JWT filter、参数解析、gRPC client stub 调用、Consul 服务发现、channel/stub 缓存，以及把 gRPC response 转回浏览器可读的 JSON/HTTP 状态。
+
+## 总链路
+
+```text
+HTTP request -> ADD_METHOD_TO route -> jwt_decode filter -> controller 参数解析 -> FindService(service name)
+FindService -> KArcCache/Consul endpoint -> lazy channel/stub -> stub->async()/stream RPC
+gRPC response/status -> Gateway JSON/HTTP status -> OpenResty -> Browser
+```
+
+这章的关键不是某个 controller 方法，而是“HTTP 应用语义如何被 Gateway 转成内部 gRPC 调用”。
+
+## 启动流程：网关启动时准备了什么
+
+`forward_part/gateway/main.cc` 负责读取配置、创建 Redis client、保存全局配置、注册 Consul、启动 Drogon。
+
+代码证据：`forward_part/gateway/main.cc`
+
+```cpp
+int main()
+{
+    auto cfg = LoadConfig("./config.json");
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- Redis client 给 `jwt_decode` 和 token 黑白名单使用。
+- `MyAppData` 是 gateway 内的轻量全局上下文，保存 Consul 地址、Kafka 地址、JWT signing key。
+- Gateway 自己会注册到 Consul；但它转发到后端 Go 服务时，也会反过来通过 Consul 查找 `account_srv/file_srv/AI_srv`。
+
+## HTTP Controller 注册机制
+
+Drogon 用 `ADD_METHOD_TO` 绑定 URL、HTTP 方法和 filter。这个文件就是 gateway 的 HTTP API 路由表。
+
+代码证据：`forward_part/gateway/controllers/FileController.h`
+
+```cpp
+ADD_METHOD_TO(FileController::filequeryinfo, "/file/query", Post, "jwt_decode");
+ADD_METHOD_TO(FileController::filedowm, "/file/download", Post, "jwt_decode");
+ADD_METHOD_TO(FileController::LoadFile, "/file/upload", Post, "jwt_decode");
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+ADD_METHOD_TO(FileController::Status, "/file/Status", Post, "jwt_decode");
+```
+
+解释：所有文件接口都挂了 `jwt_decode`，说明文件操作的用户身份不是前端 JSON 自报，而是 token 解析后注入 request attributes。
+
+## JWT filter 和身份注入
+
+`jwt_decode` filter 解析 `Authorization`，校验 token 和 Redis 黑白名单，然后把用户信息放进 request attributes。controller 再通过 `getArgumentsFromJWT` 读取。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+bool getArgumentsFromJWT(const HttpRequestPtr &req,
+                         drogon::HttpResponsePtr &resp,
+                         std::string &name,
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：`FileController` 不直接解析 JWT，它只读取 filter 注入的 `Name/ID`。如果 attributes 不存在，说明前置鉴权失败或没有经过 filter。
+
+## stub 是什么
+
+stub 是 gRPC 生成的“客户端代理对象”。Drogon controller 不直接调用 Go 函数，也不知道 Go 服务进程内部实现；它只拿到 proto 生成的 `xxxService::Stub`，通过 stub 发起 RPC。
+
+在本项目中：
+
+| 后端服务 | C++ stub 类型 | 获取位置 |
+| --- | --- | --- |
+| 账号服务 | `account::accountService::Stub` | `AccountController::FindService("account_srv")` |
+| 文件服务 | `file::fileService::Stub` | `FileController::FindService("file_srv")` |
+| AI 服务 | `AI::AIService::Stub` | `AIController::FindService("AI_srv")` |
+
+代码证据：`forward_part/gateway/controllers/FileController.h`
+
+```cpp
+mutable Cache::KArcCache<std::string,
+    std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
+
+std::shared_ptr<file::fileService::Stub> FindService(const std::string &key) const;
+```
+
+解释：`FindService` 返回的不是服务地址字符串，而是已经可用于调用 RPC 的 `fileService::Stub`。
+
+## gRPC 转发流程：HTTP JSON 如何变成 RPC
+
+以 `/file/query` 为例，Drogon 做了四步：找 stub、构造 gRPC context/request/response、从 JWT attributes 填用户身份、调用 `stub->async()->filequeryinfo(...)`。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+auto stub = FindService("file_srv");
+if (!stub)
+{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+    });
+```
+
+解释：
+
+- `ClientContext` 用来携带 metadata，例如 `x-request-id`。
+- `ReqFileQuery` 是 proto 生成的 request 类型。
+- `RespFileQuery` 是 proto 生成的 response 类型。
+- `stub->async()->filequeryinfo(...)` 才是真正发起 RPC 的地方。
+- lambda 捕获 `context/request/response` 的 `shared_ptr` 是为了保证异步 RPC 返回前对象不被释放。
+
+## 小文件上传：HTTP stream 如何转成 gRPC stream
+
+小文件上传不是普通 JSON RPC。Drogon 用 `UploadFileProxy` 把 HTTP request body 分块读出来，再写入 gRPC client stream。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+auto writer = stub_->UploadFile(&context, &grpcResp);
+
+file::UploadFileReq metaReq;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+const auto grpcStatus = writer->Finish();
+```
+
+解释：第一帧发送 `meta`，后续帧发送 `data`。这和 Go 侧 `UploadFile(stream)` 的读取逻辑对应：先读元信息，再持续接收数据块并写入 MinIO。
+
+## Multipart 转发：普通 RPC 与代理上传同时存在
+
+分片上传的大部分控制面是普通 gRPC RPC，例如 `PresignParts` 和 `CompleteMultipart`。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+auto request = std::make_shared<::file::PresignPartsReq>();
+request->set_upload_id((*jsonPtr)["upload_id"].asString());
+for (const auto &pn : (*jsonPtr)["part_numbers"])
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+stub->async()->PresignParts(context.get(), request.get(), response.get(), ...);
+```
+
+`/file/uploadpart` 不是调用 Go gRPC `UploadPart(stream)` 的主路径，而是把前端传来的预签名 URL 作为上游，用 Drogon HTTP client 代理 PUT 到 MinIO。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+const auto uploadUrl = req->getHeader("X-Presigned-Part-Url");
+parsePresignedUploadUrl(uploadUrl, target, parseError);
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+client->sendRequest(upstreamReq, ...);
+```
+
+解释：这里转发的是 HTTP PUT 到预签名对象存储 URL，不是 gRPC stream 上传分片。Go 侧 `UploadPart(stream)` 当前实现已经废弃/未实现，真实主链路是 `PresignParts + MinIO multipart`。
+
+## 缓存是怎么实现的
+
+Gateway 缓存的是“服务名 -> gRPC Entry”，Entry 里包含多个 endpoint，每个 endpoint 缓存 channel 和 stub。这样同一个服务名的后续请求可以复用 gRPC channel/stub，避免每次都查 Consul、创建连接。
+
+代码证据：`forward_part/gateway/ArcCache/ARCtemp.h`
+
+```cpp
+template <typename Service>
+struct Endpoint
+{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+};
+```
+
+解释：
+
+- `eps`：Consul 返回的多个服务实例。
+- `channel`：到某个实例的 gRPC 连接通道。
+- `stub`：基于 channel 创建的 gRPC 客户端代理。
+- `rr`：round-robin 计数器，用于在多个 endpoint 之间轮询。
+- `expire_at`：缓存 TTL，到期后需要刷新 Consul 实例。
+- `shared_mutex`：读多写少的并发保护。
+
+## 缓存查找流程
+
+代码证据：`forward_part/gateway/ArcCache/ARCtemp.h`
+
+```cpp
+if (cache.get(key, entry) && entry)
+{
+    if (auto stub = PickReadyStubRR<Service>(entry, key, ready))
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+return PickReadyStubRR<Service>(entry, key, ready);
+```
+
+解释：
+
+1. 先查本地 `KArcCache`。
+2. 如果缓存命中且有 ready stub，直接返回。
+3. 如果缓存 miss 或没有 ready stub，查 Consul passing instances。
+4. 如果 Consul 挂了但旧 entry 存在，允许 fallback 到 stale cache。
+5. 如果查到新实例，刷新 entry 并写回 cache。
+6. 最后用 round-robin 选一个 ready stub。
+
+## channel/stub 的懒创建和复用
+
+代码证据：`forward_part/gateway/ArcCache/ARCtemp.h`
+
+```cpp
+if (!entry->eps[idx].channel)
+{
+    grpc::ChannelArguments args;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：endpoint 刚从 Consul 刷新进来时只有 address/port，不立即创建 channel。真正有请求命中某个 endpoint 时才创建 channel 和 stub。后续同一 endpoint 复用已有 channel/stub。
+
+## ARC 缓存策略本身
+
+`KArcCache` 由 LRU 部分和 LFU 部分组成。热点 key 多次访问后从 LRU 迁移到 LFU；ghost cache 用来调节 LRU/LFU 容量。这里的 key 通常是服务名，例如 `file_srv`、`account_srv`、`AI_srv`。
+
+代码证据：`forward_part/gateway/ArcCache/ArcCache.h`
+
+```cpp
+std::unique_ptr<ArcLruPart<Key, Value>> lruPart_;
+std::unique_ptr<ArcLfuPart<Key, Value>> lfuPart_;
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`forward_part/gateway/ArcCache/ArcLruPart.h`
+
+```cpp
+bool updateNodeAccess(NodePtr node)
+{
+    moveToFront(node);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：第一次或低频访问先落 LRU；访问次数达到阈值后进入 LFU。对服务发现来说，这能让常用服务的 Entry 更稳定地留在缓存里。
+
+## 服务发现入口：controller 如何使用缓存
+
+每个 controller 都持有自己的 cache，并通过统一模板 `ArcGrpcLB::FindService` 取 stub。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+std::shared_ptr<file::fileService::Stub>
+FileController::FindService(const std::string &key) const
+{
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：`key = "file_srv"`，TTL 是 `10` 秒。也就是说，gateway 会短周期刷新 Consul，但请求级别优先复用本地缓存中的 channel/stub。
+
+## gRPC response 如何回 HTTP
+
+普通 RPC 返回后，controller 手工把 proto response 转成 JSON。gRPC transport 错误统一用 `grpcErrorResponse(status)` 转换。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc`
+
+```cpp
+if (!status.ok())
+{
+    callback(grpcErrorResponse(status));
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+callback(makeJsonResponse(ret, k200OK));
+```
+
+解释：HTTP 状态和业务状态不是一回事。gRPC 调通后，业务失败可能体现在 `response->code()/message()`；gRPC 调不通才走 `grpcErrorResponse`。
+
+## 状态转换
+
+Drogon 自身不落业务状态，但会推进请求处理状态和服务发现状态：
+
+```text
+HTTP request -> route matched -> JWT valid -> controller running -> gRPC request sent -> HTTP response returned
+service endpoint unknown -> Consul lookup -> cache entry created -> channel/stub lazy initialized -> reusable
+JWT invalid / service unavailable / gRPC error -> Gateway 直接返回错误，不进入后端业务成功路径
+```
+
+文件状态、扫描状态和 Outbox 状态都不在 Drogon 内改变；它只负责把身份和请求正确送到后端服务。
+
+## 关键数据结构 / 字段
+
+- `ADD_METHOD_TO`：HTTP 路由表和 filter 绑定。
+- `request attributes ID/Name`：JWT filter 注入给 controller 的身份上下文。
+- `stub`：gRPC 客户端代理对象，是 Gateway 调后端服务的入口。
+- `channel`：连接某个 gRPC endpoint 的底层抽象。
+- `KArcCache Entry/Endpoint`：服务发现结果和 ready stub/channel 的缓存载体。
+- `X-Request-Id / x-user-id metadata`：跨 HTTP/gRPC 的上下文透传字段。
+
+## 常见误判与排障顺序
+
+- 误判：Drogon 只是 Nginx 后面的透明代理。正确理解：Drogon 做 JWT、参数解析、gRPC 调用和响应转换。
+- 误判：stub 是服务实例本身。正确理解：stub 是客户端代理，背后通过 channel 连到某个 endpoint。
+- 误判：缓存缓存的是业务数据。正确理解：缓存的是服务发现 endpoint、channel/stub 等调用通道。
+- 排障顺序：路由是否命中 -> filter 是否通过 -> controller 参数是否正确 -> FindService 是否拿到 stub -> gRPC status/业务 response -> HTTP 映射是否正确。
+
+## Drogon 不做的事
+
+- 不直接写 MySQL 文件元数据。
+- 不直接决定文件扫描结果。
+- 不直接持有 MinIO 文件最终状态。
+- 不负责 Kafka outbox 一致性。
+
+这些都在 Go service 和 store service 中完成。
+
+## 阅读检查
+
+- 能从 `FileController.h` 列出文件 API 表。
+- 能解释 `stub` 是 proto 生成的 gRPC 客户端代理，不是后端服务对象本身。
+- 能画出 `HTTP request -> controller -> FindService -> cache/Consul -> stub->async RPC -> JSON response`。
+- 能说明缓存 Entry 里为什么同时保存 endpoint、channel、stub、TTL 和 round-robin 计数。
+- 能指出 `Uploadpart` 是预签名 URL 的 HTTP 代理，不等于 Go gRPC `UploadPart(stream)` 主路径。

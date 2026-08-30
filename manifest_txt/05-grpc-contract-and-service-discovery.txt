@@ -1,0 +1,343 @@
+# 05. gRPC 合同与服务发现：HTTP 如何变成内部 RPC
+
+## 本章定位
+
+gRPC 是 Drogon Gateway 和 Go 服务之间的内部协议。HTTP API 面向浏览器；proto 文件定义内部服务合同；生成代码在 Go 侧产生 server interface 和 client stub；Go 服务把实现注册到 gRPC server；Drogon 用 C++ 侧生成的 stub 发起 RPC。Consul 只负责回答"某个服务名当前有哪些健康实例、地址端口是什么"，不参与合同本身。
+
+## 总链路
+
+```text
+proto/*.proto 定义方法 + message（合同）
+  -> protoc 生成：
+     Go 侧  *_grpc.pb.go（FileServiceServer/Client 接口）
+... 省略非关键行，保留完整路径/锚点见上文 ...
+  -> Drogon controller：FindService("file_srv") 拿 stub -> stub->async()->RPC
+```
+
+解释：
+
+- 四条箭头的实现分别在 proto 目录、`backword_part/*/protobuf/`、`backword_part/*/main.go`、`forward_part/gateway/ArcCache/ARCtemp.h`。
+- 排查 RPC 问题先分清是合同问题、注册问题、发现问题、连接问题还是业务实现问题，下文各小节分别对应。
+
+## Proto 合同
+
+| Proto | 服务 | 重点 RPC |
+| --- | --- | --- |
+| `proto/account_srv/account.proto` | `accountService` | `Signin`, `Signup`, `VerifyCode`, `Userinfo` |
+| `proto/file_srv/file.proto` | `fileService` | `filedowm`, `UploadFile(stream)`, `filequeryinfo`, `InitMultipart`, `PresignParts`, `CompleteMultipart`, `AbortMultipart`, `Status`, `DeleteFile`, ... |
+| `proto/AI_srv/ai.proto` | `AIService` | `AIrequest` |
+
+代码证据：`proto/account_srv/account.proto`
+
+```proto
+syntax = "proto3";
+
+package account;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `accountService` 有 4 个 RPC，全部是 unary（一来一回），没有 stream。
+- 注意 `Resp` 只有 `code + message` 两个字段：登录返回的 JWT、userinfo 返回的用户 JSON，都借道 `message` 传输。这是本项目"业务字段一律塞 message"的风格，读 Go 侧实现时要留意。
+- `go_package` 声明了生成的 Go 包路径与别名，实际生成代码落在 `backword_part/account_server/account_srv/protobuf/`。
+
+代码证据：`proto/file_srv/file.proto`
+
+```proto
+message UploadFileReq {
+  oneof payload {
+    UploadFileMeta meta = 1;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `fileService` 有 12 个 RPC：`UploadFile(stream)` 和 `UploadPart(stream)` 是双向流式（client streaming），其余是 unary。
+- `UploadFileReq` 用 `oneof` 区分第一帧 meta 和后续 data 帧，与 C++ 侧 `UploadFileProxy` 的写入顺序对应（见 03 章）。
+- proto 里存在不代表主路径：`UploadPart(stream)` 虽然定义了，但当前主链路是 `PresignParts + MinIO multipart`（见 03 章），`ResolveFileHash` 则用于去重查询。读合同只能看到"能力清单"，主路径要结合实现看。
+
+代码证据：`proto/AI_srv/ai.proto`
+
+```proto
+syntax = "proto3";
+
+package AI;
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `AIService` 只有一个 unary RPC `AIrequest`。
+- 注意坑：`ai.proto` 的 `go_package` 写成 `clouddisk_v2/file_srv/protobuf;aipb`（与 file.proto 相同），但实际生成代码在 `backword_part/AI_server/protobuf/`（`ai_grpc.pb.go`、`ai.pb.go`、`ai.go`），AI 服务 import 的也是 `go_test/backword_part/AI_server/protobuf`。合同文件里的 go_package 声明与真实落盘位置不一致，读代码时以实际目录为准。
+
+生成代码把 proto 合同镜像成 Go 接口。以 file 为例，`FileServiceClient` 接口就是 Drogon 能调用的全部 RPC 清单。
+
+代码证据：`backword_part/file_server/file_srv/protobuf/file_grpc.pb.go:FileServiceClient`
+
+```go
+type FileServiceClient interface {
+	Filedowm(ctx context.Context, in *ReqFileDown, opts ...grpc.CallOption) (*Resp, error)
+	LoadFile(ctx context.Context, in *Reqloadfile, opts ...grpc.CallOption) (*Resp, error)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 接口是 protoc 生成的，不是手写业务代码；同名服务端接口 `FileServiceServer` 在 `file_grpc.pb.go:213`，注册函数 `RegisterFileServiceServer` 在 `file_grpc.pb.go:282`。
+- 流式 RPC（`UploadFile`、`UploadPart`）在接口里表现为返回 `FileService_UploadFileClient`，调用方用 `Write/WritesDone/Finish` 驱动，与 C++ 侧一致。
+- 该接口证明 gateway 能调哪些 RPC，但证明不了哪些是主路径——判断主路径必须继续看实现（如 `UploadPart` 业务实现返回 unimplemented）。
+
+## Go 服务启动模式
+
+账号、文件、AI 三个服务启动结构一致，可拆成五步：找空闲端口并监听 -> 创建 gRPC server（挂 interceptor）-> 注册业务实现和健康检查 -> 注册到 Consul -> `Serve()`。
+
+代码证据：`backword_part/account_server/account_srv/main.go`
+
+```go
+func main() {
+	ip := internal.ViperConf.ConsulConfig.AccountSrv.Host
+	// ---- 1. 获取随机端口并监听（只监听一次！）----
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `ListenAutoPort()` 用 `net.Listen("tcp", ":0")` 让操作系统分配空闲端口，只监听一次，`Serve(lis)` 直接复用这个 listener——注释反复强调"不要再次 net.Listen"。
+- 注册到 Consul 用的是 listener 分配到的随机 port，注册名固定 `account_srv`、实例 ID `account_srv_1`。
+- 注意注册地址 `ip` 取自 Nacos 配置（`ViperConf.ConsulConfig.AccountSrv.Host`），不是 `0.0.0.0`——这决定了其他机器能否连上该实例。
+- `RequestIDUnaryInterceptor` 把 `x-request-id` 从 metadata 提进 context（见下文 interceptor 小节）。
+
+`ElegantExit` 监听 SIGINT/SIGTERM，退出前从 Consul 反注册。
+
+代码证据：`backword_part/account_server/account_srv/main.go:ElegantExit`、`ListenAutoPort`
+
+```go
+// ElegantExit 优雅退出
+func ElegantExit() {
+	exit := make(chan os.Signal, 1)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+file service 的启动多了两块：stream interceptor 和 Kafka outbox dispatcher。
+
+代码证据：`backword_part/file_server/file_srv/main.go`
+
+```go
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- file service 挂了两个 interceptor：unary + stream（`UploadFile` 是流式 RPC，stream interceptor 负责把 `x-request-id` 注入流上下文）。
+- `RegisterFileServiceServer(grpcServer, &filepb.FileServer{})`：`FileServer{}` 只是实现了接口的普通结构体，这一行才把它挂上 gRPC server。没有这步，Drogon 连上端口也找不到 `file.fileService` 这个 service。
+- 额外启动 outbox dispatcher（DB 事务写 Outbox 行 -> Kafka 投递，见 12 章），这是 file service 独有。
+- file service 的优雅退出在 goroutine 里用 `GracefulStop()` 先停止接收新连接并等请求完成，再关 listener、反注册——比 account/AI 的"直接退出"更完整。
+
+AI 服务结构相同，但读代码时注意：它取的是 `ConsulConfig.AccountSrv.Host`（`backword_part/AI_server/main.go`），与自身服务名 `AI_srv` 不一致，属于复制粘贴遗留，部署时依赖两处 Host 相同才无感。
+
+代码证据：`backword_part/AI_server/main.go`
+
+```go
+func main() {
+	ip := internal.ViperConf.ConsulConfig.AccountSrv.Host
+	// ---- 1. 获取随机端口并监听（只监听一次！）----
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 三步核心调用与其他服务一致：`RegisterAIServiceServer`（生成函数在 `backword_part/AI_server/protobuf/ai_grpc.pb.go:85`）、`RegisterGRPCHealth`、`RegisterGrpcService("AI_srv", ...)`。
+- `ListenAutoPort`/`ElegantExit`/`RegisterGRPCHealth` 都是 `internal` 包或本文件里的公共实现，三个服务共用。
+
+## Drogon client stub
+
+Drogon controller 不直接连后端地址，而是按服务名拿 stub：先查本地 ARC 缓存，miss 时问 Consul，再创建/复用 gRPC channel。每个 controller 都声明自己的缓存和 stub 类型。
+
+代码证据：`forward_part/gateway/controllers/FileController.h`
+
+```cpp
+class FileController : public drogon::HttpController<FileController>
+{
+private:
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+		  cache_(CAPACITY) {};
+```
+
+解释：
+
+- 缓存 key 是服务名字符串（`"file_srv"`），value 是 `Entry<file::fileService>`——一个包含多个 endpoint（channel+stub）的容器，容量 20。
+- `FindService` 返回的不是地址，而是可直接调 RPC 的 `fileService::Stub`。
+
+`FindService` 的实现走统一模板 `ArcGrpcLB::FindService`，TTL 10 秒。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:FindService`
+
+```cpp
+std::shared_ptr<file::fileService::Stub> FileController::FindService(const std::string &key) const
+{
+	CloudiskConsul consul(MyAppData::instance().consulHost, MyAppData::instance().consulPort);
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+模板内部是"缓存优先、Consul 兜底、stale 兜底"的三级策略（完整代码在 03 章"缓存查找流程"）。
+
+代码证据：`forward_part/gateway/ArcCache/ARCtemp.h:FindService`
+
+```cpp
+	if (cache.get(key, entry) && entry)
+	{
+		if (auto stub = PickReadyStubRR<Service>(entry, key, ready))
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	cache.put(key, entry);
+```
+
+解释：
+
+- 请求级别的路径是"查缓存 -> 有 ready stub 直接用"，Consul 只在缓存 miss 或没有 ready stub 时访问——这是 ARC 缓存存在的意义（避免每个请求都打 Consul）。
+- `getAllPassingInstances` 只返回健康实例（C++ 侧请求 Consul 的 `health/service/<name>?passing=true`）。
+- Consul 查不到但有旧缓存时，允许 `allowExpired=true` 用 stale cache——Consul 抖动不至于立刻把请求打挂。
+- 返回 `nullptr` 时 controller 统一回 503 `service_unavailable`（见 03 章）。
+
+## Consul 在哪一层发挥作用
+
+- Go 服务：启动后把服务名、host、port、gRPC 健康检查注册到 Consul；退出时反注册。
+- Drogon Gateway：按服务名查健康实例，建立 gRPC channel；gateway 自己也注册为 `gateway_srv`。
+- OpenResty：不通过 Consul 动态发现 gateway，它固定代理到 gateway 端口（见 02 章）。
+
+Go 侧用官方 client 注册，并带 gRPC 健康检查：每 5 秒探一次，30 秒不健康自动注销。
+
+代码证据：`internal/concul.go:RegisterGrpcService`、`RegisterGRPCHealth`
+
+```go
+func RegisterGrpcService(serviceName, serviceID, host string, port int) error {
+	if ConsulClient == nil {
+		return fmt.Errorf("consul client is not initialized")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- Consul 的 `Check.GRPC` 会定期调用 gRPC 标准健康检查协议（`grpc.health.v1.Health/Check`），所以每个服务必须 `RegisterGRPCHealth` 挂上健康服务，否则 Consul 会一直标记不健康。
+- `DeregisterCriticalServiceAfter: "30s"`：服务挂掉 30 秒后 Consul 自动清理注册，防止僵尸实例占位。
+- 查询端（`DiscoverService`）用 `Health().Service(name, "", true, nil)` 只返回 passing 实例，随机选一个——这是 Go 侧的服务发现路径（当前 Drogon 不走它）。
+
+C++ 侧没有官方 client，`CloudiskConsul` 用 libcurl 直接打 Consul HTTP API：注册是 `PUT /v1/agent/service/register`，发现是 `GET /v1/health/service/<name>?passing=true`。
+
+代码证据：`forward_part/internal/consul.cpp:getServiceInstances`、`registerService`
+
+```cpp
+	// 推荐明确 passing=true
+	std::string url = "http://" + consulHost + ":" + std::to_string(consulPort) + "/v1/health/service/" + serviceName + "?passing=true";
+
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	...
+```
+
+```cpp
+	std::string json = R"({
+            "ID": ")" + serviceID +
+					   R"(",
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+        })";
+```
+
+解释：
+
+- 发现侧解析 Consul 返回的 JSON，取 `Service.Address/Port`，Address 为空时回退 `Node.Address`（Consul 常见行为，注意区分）。
+- 注册侧手拼 JSON，`Check.GRPC` 指向服务自己的 gRPC 健康端点——与 Go 侧 `RegisterGrpcService` 注册的是同一个服务，两边检查互相可见。
+- C++ 侧注册间隔 10s/超时 3s，Go 侧 5s/3s/30s 注销，参数不完全一致但不影响互操作。
+- 健康检查失败不影响注册表本身，`passing=true` 查询会自动过滤掉不健康实例——所以 Drogon 拿到的永远是"当时健康"的地址。
+
+## gRPC 与 HTTP 错误转换
+
+内部 RPC 失败不能直接暴露为浏览器不可读的 gRPC status。`forward_part/gateway/controllers/GrpcHttp.h` 负责把 gRPC status code 映射成 HTTP 状态码，统一返回 `{error, grpc_code, details}` JSON。
+
+代码证据：`forward_part/gateway/controllers/GrpcHttp.h:grpcStatusToHttpStatus`
+
+```cpp
+inline drogon::HttpStatusCode grpcStatusToHttpStatus(const grpc::Status &status)
+{
+	switch (status.error_code())
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`forward_part/gateway/controllers/GrpcHttp.h:grpcErrorResponse`
+
+```cpp
+inline drogon::HttpResponsePtr grpcErrorResponse(const grpc::Status &status, const std::string &error = "grpc_error")
+{
+	auto resp = drogon::HttpResponse::newHttpJsonResponse(grpcErrorPayload(status, error));
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+controller 的使用方式（以 `filequeryinfo` 为例）：gRPC 调不通走 `grpcErrorResponse`；调通了但业务失败走 `response->code()/message()`。
+
+代码证据：`forward_part/gateway/controllers/FileController.cc:filequeryinfo`
+
+```cpp
+	stub->async()->filequeryinfo(context.get(), request.get(), response.get(),
+								 [context, request, response, callback, rid](::grpc::Status status) {
+									 if (response == nullptr)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+									 ...
+```
+
+解释：
+
+- 映射要点：`UNAUTHENTICATED -> 401`、`PERMISSION_DENIED -> 403`、`NOT_FOUND -> 404`、`UNAVAILABLE -> 503`、`DEADLINE_EXCEEDED -> 504`；`UNKNOWN/INTERNAL/DATA_LOSS` 无法安全降级，统一 500。
+- HTTP 状态和业务状态是两回事：gRPC `status.ok()` 只代表 RPC 通了，业务成败看 `response->code()`；`grpcErrorResponse` 只在 RPC 传输层失败时用。
+- `grpcErrorPayload` 会把原始 gRPC code 透出（`grpc_code` 字段），排障时对照 Go 侧 `status.Error(codes.Xxx, ...)` 很方便——例如 04 章 `ensureMultipartOwner` 的 `PermissionDenied` 到了浏览器就是 403。
+
+## 状态转换
+
+```text
+proto 修改 -> protoc 重新生成 Go/C++ stubs -> server/client 编译通过 -> RPC 合同生效
+Go 服务启动 -> gRPC listen -> health service ready -> Consul registered -> Gateway discoverable
+Consul endpoint healthy -> Gateway channel/stub 可用 -> RPC 调用成功
+endpoint unhealthy/过期 -> Gateway cache 失效或 fallback -> RPC 返回 service_unavailable/grpc_error
+```
+
+如果只改 proto 不重新生成代码，合同不会进入实际二进制；如果服务未注册 Consul，Gateway 即使有 stub 类型也不知道连哪里。
+
+## 关键数据结构 / 字段
+
+- `proto service/rpc/message`：定义 RPC 能力和字段契约。
+- `generated Stub`：客户端代理对象，Gateway 通过它发 RPC。
+- `generated Server interface`：Go 服务实现 RPC 的接口。
+- `grpc.ClientContext / metadata`：request id、user id 等跨服务上下文。
+- `Consul service name/address/port/health`：运行时发现和健康检查信息。
+- `channel`：gRPC 到某个 endpoint 的连接抽象，stub 基于 channel 创建。
+
+## 常见误判与排障顺序
+
+- 误判：Consul 决定有哪些 RPC。正确理解：RPC 合同来自 proto，Consul 只发现地址。
+- 误判：有 stub 类型就能调用服务。正确理解：还需要 endpoint、channel、健康服务和网络连通。
+- 误判：metadata 是业务字段。正确理解：metadata 是跨服务上下文，业务字段仍在 protobuf message 中。
+- 排障顺序：proto 是否生成 -> Go 服务是否注册 RPC -> health 是否 ready -> Consul 是否有服务 -> Gateway 是否拿到 stub -> RPC metadata/response 是否正常。
+
+## 阅读检查
+
+- 能从 proto 找到 HTTP API 背后的 RPC（例如 `/file/CompleteMultipart` 对应 `CompleteMultipart`）。
+- 能解释 `RegisterFileServiceServer` 为什么是服务端注册点，没有它会发生什么。
+- 能说明 C++ controller 为什么需要 service discovery（后端端口是随机的，只有 Consul 知道）。
+- 能区分 proto 里存在的 RPC 和当前实际主链路，例如 `UploadPart(stream)` 当前不是推荐路径。
+- 能画出 `controller -> FindService -> ARC 缓存 -> Consul -> channel/stub -> async RPC -> grpcStatusToHttpStatus` 的完整流程。
+- 能说出 Go 侧健康检查协议（`grpc.health.v1.Health/Check`）与 Consul `Check.GRPC` 的关系，以及 `DeregisterCriticalServiceAfter` 的作用。
+- 能指出 `ai.proto` 的 `go_package` 声明与 AI 服务实际生成目录不一致这一坑。
+- 能区分 gRPC 传输错误（`grpcErrorResponse`）与业务错误（`response->code()`）两条错误路径。

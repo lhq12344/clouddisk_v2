@@ -1,0 +1,354 @@
+# 13. Store Service 与病毒扫描：文件什么时候真正可用
+
+## 本章定位
+
+`store_srv` 不是上传服务。对象已经由 file service 写入 MinIO，store service 的职责是消费扫描事件、读取对象流、调用 ClamAV、更新 `File.status`，并处理 retry/DLQ。第 09/11 章只把文件推进到 `pending_scan`；本章才决定它是否变成 `success`。
+
+总链路：`Kafka FileScanRequested -> tryBeginInbox -> load File -> MinIOGetObjectStream -> ScanReaderWithClamAV -> finalizeClean/finalizeInfected/markFileScanFailed`。
+
+File 的四个状态常量定义在 model 层，是本章与第 08/10 章之间的契约：只有 `success` 的文件才允许下载/预览。读者应先回顾第 12 章的 outbox/inbox/DLQ 机制，本章是它在上传扫描场景的具体应用。
+
+代码证据：`backword_part/model/filedb.go:9-14`
+
+```go
+const (
+	FilePendingScan = "pending_scan"
+	FileSuccess     = "success"
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+)
+```
+
+解释：
+
+- 四个状态构成文件生命周期：pending_scan（已落 MinIO，等待扫描）→ success（扫描通过，可用）/ infected（检出病毒，禁用）/ scan_failed（未能确认安全，禁用）。
+- 第 10 章下载/预览的放行条件只认 success，原因见本章"失败路径不能默认放行"一节。
+- `scan_failed` 不是终态：用户重传同一 hash 时 file_srv 的 `upsertFileAndRelation`（第 12 章）会把它重置回 pending_scan 并重新投递扫描事件（requeueScan 逻辑）。
+
+## 源码精读：consumer 只接受扫描请求事件
+
+FileUploadConsumer 是 sarama ConsumerGroup 的 handler，常驻消费 `file.upload.cmd`。它不做上传、不写 MinIO 对象；它只认 `FILE_SCAN_REQUESTED` 一种事件：先校验 payload 合法性，再做 Inbox 幂等抢占，然后加载 File 元数据、扫描对象、按结果 finalize。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:228-267`（processMessageInternal：校验、inbox、加载 File）
+
+```go
+	var payload model.FileEventPayload
+	if err := json.Unmarshal(msg.Value, &payload); err != nil {
+		return fmt.Errorf("%w: unmarshal payload: %v", ErrInvalidPayload, err)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- 校验是"白名单"式的：event_type 不是 FILE_SCAN_REQUESTED 直接拒绝，防止其他 topic、旧版本或伪造事件混入。
+- `normalizeObjectKey`（同文件 551-559 行）：payload 缺 OssKey 时用 `files/<sha1>` 兜底，兼容历史消息。
+- 校验错误全部是 `ErrInvalid*` 家族（第 12 章 retry.go 定义），属于 non_retryable，会被 handleTerminalFailure 直接收敛，不浪费重试次数。
+- tryBeginInbox 三态结果：done=已处理过跳过、!acquired=别人持有锁（返回 ErrInboxLocked 等退避）、acquired=拿到处理权。
+- loadFileRecord（同文件 290-303 行）按 FileID 或 Sha1 查 File：DB 里没有元数据 = ErrFileNotFound，同样不可重试。
+- 文件已 `success/infected` 时（同文件 268-273 行）直接 markInboxDone 跳过——消息重复投递到已终态文件的场景在此收敛。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:60-89`（ConsumeClaim 主循环与 offset 提交策略）
+
+```go
+func (c *FileUploadConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for {
+		select {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- consumeCommit 分支：处理成功（或已收敛为终态失败）→ `commitMessage`（同文件 91-100 行）MarkMessage + Commit，消息移出重放窗口。
+- consumeRetryLater 分支：不提交 offset。进程重启后同一消息会被重新投递——"至少一次"语义的体现，配合 Inbox 幂等保证副作用只发生一次。
+- 每条消息最多重试 MaxRetries 次（默认 3，见 retry.go），之后走 handleTerminalFailure 收敛并提交 offset，避免一条坏消息永久阻塞分区。
+
+代码证据：`other_srv/store_srv/main.go:30-57`（启动装配：主题、group、sarama 配置）
+
+```go
+	brokers := []string{internal.ViperConf.KafkaConfig.Host + ":" + internal.ViperConf.KafkaConfig.Port}
+	mainTopic := model.FileUploadEventTopic
+	dlqTopic := model.FileUploadEventTopic + ".dlq"
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	defer consumerGroup.Close()
+```
+
+解释：
+
+- 主 topic 是第 12 章的 `file.upload.cmd`，DLQ topic 是主 topic 加 `.dlq` 后缀——主题命名约定在此落地。
+- `AutoCommit.Enable = false`：offset 由 ConsumeClaim 显式提交，配合"重试不提交"实现至少一次。
+- 主消费者属于 `store_srv_group`：多个 store_srv 实例组成同一消费组分摊分区，天然支持水平扩展；DLQ 消费者属于独立的 `store_srv_dlq_group`。
+- `OffsetNewest`：新实例只消费新消息；已经积压的历史消息由 DLQ 恢复链路或重传兜底。
+
+## 源码精读：MinIO 提供扫描字节流
+
+扫描的输入是 MinIO 对象流，不是 MySQL 里的字节。DB 只保存 object key、hash、状态等元数据；真实字节在 MinIO。consumer 用 `MinIOGetObjectStream` 拿到 reader 后直接交给 ClamAV 流式读取，全程不落本地磁盘。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:305-325`（scanObject）
+
+```go
+func (c *FileUploadConsumer) scanObject(ctx context.Context, objectKey string, objectSize int64) (signature string, infected bool, err error) {
+	if c.ossClient == nil {
+		return "", false, fmt.Errorf("%w: minio client not initialized", ErrServiceUnavailable)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `scanCtx` 带 ClamAV 配置的超时（默认 30s，Nacos 可配）：扫描超时按临时错误走重试，绝不把"没扫完"误判为"干净"。
+- 取流失败包装成 `ErrTemporaryFailure`（可重试）；MinIO 客户端未初始化是 `ErrServiceUnavailable`（同样可重试）。
+- 返回 verdict 中的 Signature + Infected 两项；`Raw`（clamd 原始回复）不进 DB，scan_detail 只存签名。
+
+代码证据：`internal/minio.go:318-328`（MinIOGetObjectStream）
+
+```go
+func (c *MINIOClient) MinIOGetObjectStream(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	if c == nil || c.Client == nil {
+		return nil, fmt.Errorf("minio client is nil")
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+代码证据：`internal/minio.go:142-145`（MinIODeleteObject）
+
+```go
+func (c *MINIOClient) MinIODeleteObject(objectKey string) error {
+	ctx := context.Background()
+	return c.Client.RemoveObject(ctx, c.Bucket, objectKey, minio.RemoveObjectOptions{})
+}
+```
+
+解释：
+
+- `core.GetObject` 返回流式 reader：对象数据边下载边消费，不会一次性把整个文件加载进内存——这是能扫描大文件（含第 11 章的分片对象）的前提。
+- `MinIOGetObjectStream` 返回 `io.ReadCloser`，调用方必须 Close：scanObject 里 `defer reader.Close()` 保证连接归还 MinIO 连接池。
+- `MinIODeleteObject` 供 infected 分支物理删除对象；NoSuchKey/NotFound 被视作"已删"处理（见 finalizeInfected 节）。
+
+## 源码精读：ClamAV 使用 INSTREAM 协议
+
+ClamAV daemon（clamd）通过文本协议与客户端通信。扫描大文件必须用 INSTREAM 模式：客户端先发 `nINSTREAM\n` 命令，然后反复发送"4 字节大端长度 + 数据块"，最后发一个 0 长度块表示流结束，daemon 回复一行结果（`stream: OK` 或 `stream: <签名> FOUND`）。整个过程中文件内容流式转发，不落盘、不进内存。
+
+代码证据：`other_srv/store_srv/kafka/clamav.go:74-92`（ScanReaderWithClamAV 前置：大小限制与连接）
+
+```go
+func ScanReaderWithClamAV(ctx context.Context, reader io.Reader, objectSize int64) (*ClamAVVerdict, error) {
+	cfg := internal.ViperConf.ClamAV
+	resolvedSocket := strings.TrimSpace(cfg.SocketPath())
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	defer conn.Close()
+```
+
+解释：
+
+- `EffectiveStreamLimitBytes`（internal/clamav.go:68-85）取 `max_scan_size_mb / max_file_size_mb / stream_max_length_mb` 三者中的最小值；超限直接报 `ErrFileTooLarge`（non_retryable），避免把超大文件喂给 clamd 被拒。
+- 连接优先走 unix socket（`dialClamAV`，同文件 23-61 行）：显式配置的 Socket 最优先，其次本地主机（localhost/回环 IP）时尝试 `SocketPath()` 探测到的 socket，最后回退 TCP host:port。
+- `SocketPath()`（internal/clamav.go:27-66）依次检查 `CLAMAV_SOCKET` 环境变量、进程工作目录/可执行文件目录下的 `run/clamav/clamd-local.ctl`、系统默认路径——本地开发启动脚本的 socket 位置见下文 clamd_local.sh。
+
+代码证据：`other_srv/store_srv/kafka/clamav.go:110-146`（INSTREAM 协议主体）
+
+```go
+	if _, err := conn.Write([]byte("nINSTREAM\n")); err != nil {
+		return nil, classifyClamAVWriteError(conn, timeout, "send clamd command", err)
+	}
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 协议序列：`nINSTREAM\n` 进入流式模式 → 循环 `[4 字节大端长度][chunk]` → 最后 `[4 字节 0]` 结束流 → 读一行回复。
+- 32KB 固定读缓冲：从 MinIO stream 读到的字节立即转发给 clamd，任何时刻内存中只有 32KB，扫描超大文件不占内存。
+- 连接带 deadline（同函数 104-108 行 SetDeadline），任何阶段卡住都会超时返回；写失败时 `classifyClamAVWriteError`（148-157 行）会先尝试读一行 clamd 的异常回复，避免把 daemon 的错误当普通网络错误误分类。
+- 回复一行形如 `stream: OK`（干净）或 `stream: Eicar-Test-Signature FOUND`（感染），由 parseClamAVReply 判定。
+
+代码证据：`other_srv/store_srv/kafka/clamav.go:168-183`（parseClamAVReply）
+
+```go
+func parseClamAVReply(reply string) (*ClamAVVerdict, error) {
+	reply = strings.TrimSpace(reply)
+	switch {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 判定规则简单可靠：后缀 `OK` = 干净；后缀 `FOUND` = 感染，签名从 `stream: <签名> FOUND` 中剥出。
+- `size limit exceeded` 单独映射成 `ErrFileTooLarge`（non_retryable）：clamd 侧配置的 StreamMaxLength 比我们的检查更严格时，从这里兜住。
+- 其余意外回复统一 `ErrServiceUnavailable`（可重试），并把原始文本带进错误信息便于排障。
+
+代码证据：`scripts/project_start_scripts/clamd_local.sh:49-72`（本地 clamd 配置生成）
+
+```bash
+write_config() {
+    cat > "$CONF_FILE" <<EOF
+LocalSocket ${SOCKET_FILE}
+# ... 省略非关键行，保留完整路径/配置锚点见上文 ...
+}
+```
+
+解释：
+
+- 本地开发用 `clamd -c run/clamav/clamd-local.conf` 启动独立 clamd：LocalSocket 指向 `run/clamav/clamd-local.ctl`，与 internal/clamav.go 的 SocketPath 探测路径吻合。
+- `LocalSocketMode 666` 让 store_srv 进程（不同用户）也能连 socket；`FixStaleSocket` 处理异常退出残留的 socket 文件。
+- `StreamMaxLength/MaxScanSize/MaxFileSize` 统一取 `CLAMD_LIMIT_MB`（默认 1024），与 consumer 侧 EffectiveStreamLimitBytes 相互配合：两侧都有限制，谁更严以谁为准。
+- 排查扫描卡顿的要点：MinIO stream 是否在持续产出、clamd 连接（socket 还是 tcp）、INSTREAM 回复是否被完整读取——三段对应 scanObject / dialClamAV / parseClamAVReply。
+
+## 源码精读：clean 才进入 success
+
+扫描干净时，store service 在 DB 事务里更新 File 状态为 success，清空 scan_detail、记录 scanned_at，并同步把 Inbox 置为 DONE。第 10 章下载/预览依赖的 `FileSuccess` 就来自这里。上传接口本身不能越过这一步直接放行文件。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:327-342`（finalizeClean）
+
+```go
+func (c *FileUploadConsumer) finalizeClean(ctx context.Context, payload *model.FileEventPayload) error {
+	now := time.Now()
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- "File 置 success"与"Inbox 置 DONE"在同一事务：要么两个都生效，要么都回滚。这是"一次且仅一次最终副作用"的最后防线（重复消息到达时 Inbox 已 DONE，直接跳过）。
+- 事务顺带用 payload 补全 object_key/content_type/size：payload 元数据可能与 File 行不一致（如 scan_failed 后重传换了对象），以扫描时的 payload 为准。
+- finalizeClean 失败（如 Inbox 行锁被改）返回错误，整条消息重试；重试时 tryBeginInbox 续锁或重抢。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:397-420, 428-439`（updateFileByEvent 与 markInboxDoneTx）
+
+```go
+func (c *FileUploadConsumer) updateFileByEvent(tx *gorm.DB, payload *model.FileEventPayload, updates map[string]any) error {
+	if payload == nil {
+		return fmt.Errorf("%w: nil payload", ErrInvalidPayload)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- updateFileByEvent 支持两种定位方式：优先 FileID，回退 Sha1——payload 两种身份都带，消息与 DB 的衔接灵活。
+- `RowsAffected == 0` 转 `gorm.ErrRecordNotFound`：文件行不存在说明元数据被删，最终在 handleTerminalFailure 里按不可重试收敛。
+- markInboxDoneTx 的 WHERE 带 `locked_by = c.instanceID`：只有锁持有者（当前处理者）能把 Inbox 置 DONE，防止把别人正在处理的记录误标完成。
+
+## 源码精读：infected 会删除对象并记录原因
+
+感染文件的处理不是只改状态，还会先删除 MinIO object。删除成功（或对象本来就不存在）后，在事务里把 File 置为 infected、scan_detail 存病毒签名，并把 Inbox 置 DONE。这解释了为什么 infected 文件必须禁止下载/预览：对象可能已经被删除，业务状态也明确标记为不安全。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:344-370`（finalizeInfected）
+
+```go
+func (c *FileUploadConsumer) finalizeInfected(ctx context.Context, payload *model.FileEventPayload, signature string) error {
+	if c.ossClient == nil {
+		return fmt.Errorf("%w: minio client not initialized", ErrServiceUnavailable)
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 删除对象与改状态不在同一事务（跨系统无法事务），但顺序有讲究：先删对象、后改状态。删除失败且不是 NoSuchKey/NotFound 时直接返回 `ErrTemporaryFailure`——宁可重试，也不在对象还完好时把状态落成 infected 后停止重试。
+- `NoSuchKey/NotFound`（对象已被删或从未存在）视为删除成功：继续落 infected 状态，保持"病毒文件在业务侧被标记"的一致性。
+- `truncateReason`（同文件 561-568 行）把签名截断到 1024 字符（scan_detail 是 text 列），防止超长签名撑爆存储。
+- scan_detail 保存病毒签名（如 `Eicar-Test-Signature`），是安全团队排查与用户申诉的依据。
+
+## 源码精读：失败路径不能默认放行
+
+扫描连接失败、对象读取失败、DB 更新失败会走 retry/backoff；耗尽重试后由 handleTerminalFailure 标记 `scan_failed` 并进 DLQ。`scan_failed` 的语义是"未能确认安全"，不是"安全"。所以第 10 章只允许 `success` 是合理的：任何未确认路径都是拒绝服务。
+
+代码证据：`other_srv/store_srv/kafka/retry.go:64-104`（IsRetryableError 判定）
+
+```go
+// IsRetryableError 判断错误是否可重试
+func IsRetryableError(err error) bool {
+	if err == nil {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- 可重试错误集中在"瞬时故障"：网络超时、连接重置、服务不可用等；错误消息关键字匹配作为兜底（第三方库抛出的原始错误也能正确归类）。
+- 不可重试错误（retry.go:53-60 的 `ErrInvalidPayload/ErrFileNotFound/ErrFileTooLarge/...`）直接收敛，避免对"坏消息"做无意义重试。
+- 默认重试配置（retry.go:19-26）为 MaxRetries=3、InitialBackoff=1s、MaxBackoff=30s、倍率 2.0：1s/2s/4s 退避。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:109-140`（processMessageWithRetry 重试循环）
+
+```go
+	for retryCount <= c.retryConfig.MaxRetries {
+		if ctx.Err() != nil {
+			return consumeRetryLater, ctx.Err()
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+	}
+```
+
+解释：
+
+- ErrInboxLocked 单独走短退避路径（`calculateInboxLockBackoff` 上限 5s，同文件 166-172 行）：锁冲突不是扫描失败，是并发调度问题，应该快速重试而不是计入指数退避。
+- 不可重试错误立即 handleTerminalFailure：标记 scan_failed + 投 DLQ + 提交 offset（见第 12 章 DLQ 节），一次失败就收敛。
+- 可重试错误按 1s/2s/4s 退避最多 3 次；`retryCount <= MaxRetries` 的循环条件使第 4 次失败跳出循环，走函数末尾的 handleTerminalFailure。
+
+代码证据：`other_srv/store_srv/kafka/kafkacunsumer.go:380-395`（markFileScanFailed）
+
+```go
+func (c *FileUploadConsumer) markFileScanFailed(ctx context.Context, payload *model.FileEventPayload, reason string) error {
+	now := time.Now()
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+// ... 省略非关键行，保留完整路径/函数锚点见上文 ...
+}
+```
+
+解释：
+
+- `scan_failed` 落库不联动 Inbox DONE：文件状态与 Inbox 状态分离（Inbox 由 DLQ 链路置 DLQ/DONE，第 12 章），DLQ 消费者重放成功后再收敛。
+- `scan_detail` 存截断的错误文本——"为什么没能确认安全"的现场记录。
+- 文件行不存在时静默成功（return nil）：元数据已删的场景不再制造 DLQ 噪音。
+- 第 10 章下载/预览只认 success：scan_failed 的文件不可下载、不可预览；用户重传同一 hash 时 file_srv 会重置为 pending_scan 并重新投递（requeueScan）。
+
+## 状态转换
+
+store service 是文件安全状态的最终推进者。
+
+```text
+pending_scan -> Kafka FileScanRequested 被消费 -> Inbox processing
+Inbox processing -> MinIO stream + ClamAV OK -> File.success + Inbox.done
+Inbox processing -> ClamAV FOUND -> 删除 MinIO object -> File.infected + Inbox.done
+Inbox processing -> 临时错误 -> retry/backoff -> 再次扫描
+Inbox processing -> 不可重试或重试耗尽 -> File.scan_failed + DLQ
+```
+
+下游影响：
+
+```text
+success -> 第 10 章下载/预览允许签 URL
+infected -> object 被删除，前端展示 Blocked，下载/预览返回 409
+scan_failed -> 未确认安全，前端展示 Scan Failed，下载/预览返回 409
+```
+
+## 关键数据结构 / 字段
+
+- `FileEventPayload.event_id`：连接 Kafka event、Inbox 和 DLQ 的幂等键。
+- `FileEventPayload.oss_key`：store service 从 MinIO 读取对象流的 key。
+- `File.status`：扫描结果写回的核心业务状态。
+- `File.scan_detail`：感染签名或扫描失败原因。
+- `Inbox.status / locked_by`：保证同一事件只有一个 consumer 做最终副作用。
+- `ClamAVVerdict.infected / signature`：决定 `success` 还是 `infected` 的扫描结果。
+
+## 常见误判与排障顺序
+
+- 误判：store service 是上传服务。正确理解：它消费已上传事件，负责扫描和状态终态。
+- 误判：扫描失败可以默认放行。正确理解：scan_failed 表示未确认安全，必须禁止下载。
+- 误判：infected 只改 DB 状态。正确理解：还会删除 MinIO object，避免继续传播。
+- 排障顺序：Kafka event payload -> Inbox 是否拿锁 -> MinIO object stream -> ClamAV 连接/INSTREAM 回复 -> finalizeClean/finalizeInfected -> scan_failed/DLQ。
+
+## 阅读检查
+
+- 能说明 `pending_scan -> success/infected/scan_failed` 的状态变化在哪里完成。
+- 能解释 ClamAV INSTREAM 的基本协议形态（命令、分块、0 长度结束、一行回复）。
+- 能说明为什么 infected 要删除 object，以及 NoSuchKey/NotFound 为什么不算删除失败。
+- 能定位 `tryBeginInbox`、`scanObject`、`ScanReaderWithClamAV`、`finalizeClean/finalizeInfected`、`markFileScanFailed`。
+- 能说清 finalizeClean/finalizeInfected 里"File 更新 + Inbox DONE"为什么必须在同一事务。
+- 能解释为什么扫描失败不能默认放行：scan_failed 的语义是"未能确认安全"，不是"安全"。
+- 能区分可重试错误（timeout/connection/temporary）与不可重试错误（invalid payload/file not found），并说出各自的收敛路径。
+- 能说出 store_srv 从哪个 topic 消费、属于哪个 consumer group、DLQ topic 叫什么，以及 offset 为什么手动提交。
+- 能画出 INSTREAM 的字节序列，并指出排查扫描卡顿时要检查的三段（MinIO stream、clamd 连接、回复解析）。
