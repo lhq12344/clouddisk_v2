@@ -4,17 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	accountpb "go_test/backword_part/account_server/account_srv/protobuf"
-	filepb "go_test/backword_part/file_server/file_srv/protobuf"
+	"go_test/backword_part/model"
+	storagecontrolpb "go_test/clouddisk_v2/storage_control/protobuf"
+	"go_test/internal"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerTools(s *server.MCPServer, clients *serviceClients, timeout time.Duration) {
+type ownedFile struct {
+	FileID      uint
+	Filename    string
+	FileHash    string
+	FileSize    int64
+	Status      string
+	ScanDetail  string
+	ContentType string
+	ObjectKey   string
+}
 
+func registerTools(s *server.MCPServer, clients *serviceClients, timeout time.Duration) {
 	s.AddTool(accountUserinfoTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		claims, err := requireClaims(ctx)
 		if err != nil {
@@ -23,82 +35,27 @@ func registerTools(s *server.MCPServer, clients *serviceClients, timeout time.Du
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := clients.account.Userinfo(callCtx, &accountpb.ReqUserinfo{
-			ID:       claims.UserID,
-			Username: claims.Username,
-		})
-		if err != nil {
+		var account model.Account
+		if err := internal.DB.WithContext(callCtx).First(&account, claims.UserID).Error; err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return newJSONResult(resp)
+		return newJSONResult(map[string]any{
+			"username":  account.Name,
+			"email":     account.Email,
+			"name":      account.Name,
+			"mobile":    account.Mobile,
+			"gender":    account.Gender,
+			"createdAt": account.CreatedAt,
+			"updatedAt": account.UpdatedAt,
+		})
 	})
 
 	s.AddTool(fileShowTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		claims, err := requireClaims(ctx)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		filename, err := request.RequireString("filename")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		fileHash, err := request.RequireString("file_hash")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		fileSize, err := requireInt32(request, "file_size")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		resp, err := clients.file.Showfile(callCtx, &filepb.Reqshowfile{
-			Username: claims.Username,
-			Userid:   fmt.Sprintf("%d", claims.UserID),
-			Filename: filename,
-			Filehash: fileHash,
-			FileSize: fileSize,
-		})
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return newJSONResult(resp)
+		return presignOwnedFileTool(ctx, request, clients, timeout, true)
 	})
 
 	s.AddTool(fileDownloadTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		claims, err := requireClaims(ctx)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		filename, err := request.RequireString("filename")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		fileHash, err := request.RequireString("file_hash")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		fileSize, err := requireInt32(request, "file_size")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
-		resp, err := clients.file.Filedowm(callCtx, &filepb.ReqFileDown{
-			Username: claims.Username,
-			Userid:   fmt.Sprintf("%d", claims.UserID),
-			Filename: filename,
-			Filehash: fileHash,
-			FileSize: fileSize,
-		})
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		return newJSONResult(resp)
+		return presignOwnedFileTool(ctx, request, clients, timeout, false)
 	})
 
 	s.AddTool(fileQueryTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -106,18 +63,22 @@ func registerTools(s *server.MCPServer, clients *serviceClients, timeout time.Du
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := clients.file.Filequeryinfo(callCtx, &filepb.ReqFileQuery{
-			Username: claims.Username,
-			Userid:   fmt.Sprintf("%d", claims.UserID),
-		})
+		files, err := listOwnedFiles(callCtx, claims.UserID)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return newJSONResult(resp)
+		items := make([]map[string]any, 0, len(files))
+		for _, file := range files {
+			items = append(items, fileItemJSON(file))
+		}
+		return newJSONResult(map[string]any{
+			"status":   0,
+			"message":  "ok",
+			"filelist": items,
+		})
 	})
 
 	s.AddTool(fileResolveHashTool(), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -125,25 +86,127 @@ func registerTools(s *server.MCPServer, clients *serviceClients, timeout time.Du
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-
 		filename, err := request.RequireString("filename")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		resp, err := clients.file.ResolveFileHash(callCtx, &filepb.ReqResolveFileHash{
-			Userid:   fmt.Sprintf("%d", claims.UserID),
-			Filename: filename,
-		})
+		file, err := loadOwnedFile(callCtx, claims.UserID, filename, "", 0)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return newJSONResult(resp)
+		return newJSONResult(fileItemJSON(file))
 	})
+}
 
+func presignOwnedFileTool(ctx context.Context, request mcp.CallToolRequest, clients *serviceClients, timeout time.Duration, inline bool) (*mcp.CallToolResult, error) {
+	claims, err := requireClaims(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	filename, err := request.RequireString("filename")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	fileHash, err := request.RequireString("file_hash")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	fileSize, err := requireInt32(request, "file_size")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	file, err := loadOwnedFile(callCtx, claims.UserID, filename, fileHash, int64(fileSize))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if file.Status != model.FileSuccess {
+		return mcp.NewToolResultError(fmt.Sprintf("file is not available: status=%s", file.Status)), nil
+	}
+	if clients == nil || clients.storageControl == nil {
+		return mcp.NewToolResultError("storage_control client unavailable"), nil
+	}
+	objectKey := strings.TrimSpace(file.ObjectKey)
+	if objectKey == "" {
+		objectKey = "files/" + strings.TrimSpace(file.FileHash)
+	}
+	resp, err := clients.storageControl.PresignGet(callCtx, &storagecontrolpb.PresignGetReq{
+		ObjectKey:         objectKey,
+		Filename:          file.Filename,
+		ContentType:       file.ContentType,
+		InlineDisposition: inline,
+		ExpiresSeconds:    int64((10 * time.Minute).Seconds()),
+	})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	key := "download_url"
+	if inline {
+		key = "preview_url"
+	}
+	return newJSONResult(map[string]any{
+		"status":   0,
+		"message":  resp.Url,
+		key:        resp.Url,
+		"filename": file.Filename,
+	})
+}
+
+func listOwnedFiles(ctx context.Context, userID int32) ([]ownedFile, error) {
+	var files []ownedFile
+	result := internal.DB.WithContext(ctx).Raw(
+		"select f.id as file_id, uf.name as filename, f.sha1 as file_hash, f.size as file_size, f.status, f.scan_detail, f.content_type, f.object_key "+
+			"from user_files uf join files f on f.id = uf.file_id and f.deleted_at is null "+
+			"where uf.account_id = ? and uf.deleted_at is null order by uf.id desc",
+		uint(userID)).Scan(&files)
+	return files, result.Error
+}
+
+func loadOwnedFile(ctx context.Context, userID int32, filename, fileHash string, fileSize int64) (ownedFile, error) {
+	query := "select f.id as file_id, uf.name as filename, f.sha1 as file_hash, f.size as file_size, f.status, f.scan_detail, f.content_type, f.object_key " +
+		"from user_files uf join files f on f.id = uf.file_id and f.deleted_at is null " +
+		"where uf.account_id = ? and uf.deleted_at is null and uf.name = ?"
+	args := []any{uint(userID), filename}
+	if strings.TrimSpace(fileHash) != "" {
+		query += " and f.sha1 = ?"
+		args = append(args, fileHash)
+	}
+	if fileSize > 0 {
+		query += " and f.size = ?"
+		args = append(args, fileSize)
+	}
+	query += " limit 1"
+
+	var file ownedFile
+	result := internal.DB.WithContext(ctx).Raw(query, args...).Scan(&file)
+	if result.Error != nil {
+		return ownedFile{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ownedFile{}, fmt.Errorf("file not found or not owned")
+	}
+	return file, nil
+}
+
+func fileItemJSON(file ownedFile) map[string]any {
+	return map[string]any{
+		"file_id":      file.FileID,
+		"filename":     file.Filename,
+		"filehash":     file.FileHash,
+		"file_hash":    file.FileHash,
+		"filesize":     file.FileSize,
+		"file_size":    file.FileSize,
+		"status":       file.Status,
+		"scan_detail":  file.ScanDetail,
+		"content_type": file.ContentType,
+		"object_key":   file.ObjectKey,
+	}
 }
 
 func accountUserinfoTool() mcp.Tool {
@@ -182,6 +245,7 @@ func fileResolveHashTool() mcp.Tool {
 		mcp.WithString("filename", mcp.Required(), mcp.Description("User file name (exact match)")),
 	)
 }
+
 func newJSONResult(data any) (*mcp.CallToolResult, error) {
 	result, err := mcp.NewToolResultJSON(data)
 	if err != nil {

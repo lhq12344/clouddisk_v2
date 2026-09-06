@@ -12,6 +12,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <cstdio>
+#include <exception>
 
 // ============ 工具：生成验证码 ============
 string gen_code()

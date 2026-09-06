@@ -2,6 +2,9 @@
 #include "GrpcHttp.h"
 #include <json/json.h>
 
+#include <memory>
+#include <string>
+
 // 解析 JSON 字符串
 static bool parseJsonString(const std::string &s, Json::Value &out, std::string &errs)
 {

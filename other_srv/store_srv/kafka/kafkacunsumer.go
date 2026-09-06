@@ -20,6 +20,8 @@ import (
 // ErrInboxLocked 表示 Inbox 正被其他实例处理，当前分区不应越过这条消息推进 offset。
 var ErrInboxLocked = errors.New("inbox locked by other worker")
 
+var errFileScanAlreadyConverged = errors.New("file scan already converged")
+
 type consumeAction int
 
 const (
@@ -173,6 +175,13 @@ func (c *FileUploadConsumer) calculateInboxLockBackoff(attempt int) time.Duratio
 
 func (c *FileUploadConsumer) handleTerminalFailure(ctx context.Context, msg *sarama.ConsumerMessage, err error, retryCount int) error {
 	if markErr := c.markMessageScanFailed(ctx, msg, err.Error()); markErr != nil {
+		if errors.Is(markErr, errFileScanAlreadyConverged) {
+			eventID, eventErr := extractEventID(msg.Value)
+			if eventErr != nil || eventID == "" {
+				return nil
+			}
+			return c.markInboxDone(ctx, eventID)
+		}
 		internal.Logger.Error("[FileUploadConsumer]mark scan_failed failed",
 			zap.Error(markErr),
 			zap.Int64("offset", msg.Offset))
@@ -237,6 +246,9 @@ func (c *FileUploadConsumer) processMessageInternal(ctx context.Context, msg *sa
 	if payload.EventID == "" {
 		return fmt.Errorf("%w: missing event_id", ErrInvalidEventID)
 	}
+	if payload.EventType == model.ObjectDeleteRequested {
+		return c.processObjectDeleteRequested(ctx, &payload)
+	}
 	if payload.EventType != model.FileScanRequested {
 		return fmt.Errorf("%w: unexpected event_type=%s", ErrInvalidPayload, payload.EventType)
 	}
@@ -287,6 +299,72 @@ func (c *FileUploadConsumer) processMessageInternal(ctx context.Context, msg *sa
 	return c.finalizeClean(ctx, &payload)
 }
 
+func (c *FileUploadConsumer) processObjectDeleteRequested(ctx context.Context, payload *model.FileEventPayload) error {
+	if payload.EventID == "" {
+		return fmt.Errorf("%w: missing event_id", ErrInvalidEventID)
+	}
+	if payload.FileID == 0 && payload.Sha1 == "" {
+		return fmt.Errorf("%w: missing file identity", ErrInvalidPayload)
+	}
+	if payload.OssKey == "" {
+		payload.OssKey = normalizeObjectKey(payload.OssKey, payload.Sha1)
+	}
+	if payload.OssKey == "" {
+		return fmt.Errorf("%w: missing object key", ErrInvalidObjectKey)
+	}
+
+	acquired, done, err := c.tryBeginInbox(ctx, payload.EventID, false)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	if !acquired {
+		return ErrInboxLocked
+	}
+
+	var remaining int64
+	query := internal.DB.WithContext(ctx).Model(&model.UserFile{})
+	if payload.FileID != 0 {
+		query = query.Where("file_id = ?", payload.FileID)
+	} else {
+		query = query.Joins("JOIN files ON files.id = user_files.file_id AND files.sha1 = ?", payload.Sha1)
+	}
+	if err := query.Count(&remaining).Error; err != nil {
+		return err
+	}
+	if remaining > 0 {
+		internal.Logger.Warn("[FileUploadConsumer]skip object delete because references remain",
+			zap.String("event_id", payload.EventID),
+			zap.Int64("remaining", remaining))
+		return c.markInboxDone(ctx, payload.EventID)
+	}
+
+	if c.ossClient == nil {
+		return fmt.Errorf("%w: minio client not initialized", ErrServiceUnavailable)
+	}
+	if err := c.ossClient.MinIODeleteObject(payload.OssKey); err != nil {
+		resp := minio.ToErrorResponse(err)
+		if resp.Code != "NoSuchKey" && resp.Code != "NotFound" {
+			return fmt.Errorf("%w: delete object: %v", ErrTemporaryFailure, err)
+		}
+	}
+
+	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if payload.FileID != 0 {
+			if err := tx.Where("id = ?", payload.FileID).Delete(&model.File{}).Error; err != nil {
+				return err
+			}
+		} else if payload.Sha1 != "" {
+			if err := tx.Where("sha1 = ?", payload.Sha1).Delete(&model.File{}).Error; err != nil {
+				return err
+			}
+		}
+		return c.markInboxDoneTx(tx, payload.EventID)
+	})
+}
+
 func (c *FileUploadConsumer) loadFileRecord(ctx context.Context, payload *model.FileEventPayload) (*model.File, error) {
 	var file model.File
 	query := internal.DB.WithContext(ctx)
@@ -335,6 +413,9 @@ func (c *FileUploadConsumer) finalizeClean(ctx context.Context, payload *model.F
 			"content_type": payload.ContentType,
 			"size":         payload.Size,
 		}); err != nil {
+			if errors.Is(err, errFileScanAlreadyConverged) {
+				return c.markInboxDoneTx(tx, payload.EventID)
+			}
 			return err
 		}
 		return c.markInboxDoneTx(tx, payload.EventID)
@@ -363,6 +444,9 @@ func (c *FileUploadConsumer) finalizeInfected(ctx context.Context, payload *mode
 			"content_type": payload.ContentType,
 			"size":         payload.Size,
 		}); err != nil {
+			if errors.Is(err, errFileScanAlreadyConverged) {
+				return c.markInboxDoneTx(tx, payload.EventID)
+			}
 			return err
 		}
 		return c.markInboxDoneTx(tx, payload.EventID)
@@ -385,6 +469,9 @@ func (c *FileUploadConsumer) markFileScanFailed(ctx context.Context, payload *mo
 			"scan_detail": truncateReason(reason),
 			"scanned_at":  &now,
 		}); err != nil {
+			if errors.Is(err, errFileScanAlreadyConverged) {
+				return err
+			}
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}
@@ -409,14 +496,48 @@ func (c *FileUploadConsumer) updateFileByEvent(tx *gorm.DB, payload *model.FileE
 		return gorm.ErrRecordNotFound
 	}
 
-	result := db.Updates(updates)
+	result := db.Where("status = ?", model.FilePendingScan).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
+		converged, err := c.fileScanAlreadyConvergedTx(tx, payload)
+		if err != nil {
+			return err
+		}
+		if converged {
+			return errFileScanAlreadyConverged
+		}
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func (c *FileUploadConsumer) fileScanAlreadyConvergedTx(tx *gorm.DB, payload *model.FileEventPayload) (bool, error) {
+	if payload == nil {
+		return false, fmt.Errorf("%w: nil payload", ErrInvalidPayload)
+	}
+
+	var file model.File
+	db := tx.Select("status")
+	switch {
+	case payload.FileID != 0:
+		db = db.Where("id = ?", payload.FileID)
+	case payload.Sha1 != "":
+		db = db.Where("sha1 = ?", payload.Sha1)
+	default:
+		return false, gorm.ErrRecordNotFound
+	}
+	if err := db.Take(&file).Error; err != nil {
+		return false, err
+	}
+
+	switch file.Status {
+	case model.FileSuccess, model.FileInfected, model.FileScanFailed:
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (c *FileUploadConsumer) markInboxDone(ctx context.Context, eventID string) error {
@@ -427,7 +548,7 @@ func (c *FileUploadConsumer) markInboxDone(ctx context.Context, eventID string) 
 
 func (c *FileUploadConsumer) markInboxDoneTx(tx *gorm.DB, eventID string) error {
 	now := time.Now()
-	return tx.Model(&model.Inbox{}).
+	result := tx.Model(&model.Inbox{}).
 		Where("event_id = ? AND locked_by = ?", eventID, c.instanceID).
 		Updates(map[string]any{
 			"status":       model.InboxDone,
@@ -435,7 +556,14 @@ func (c *FileUploadConsumer) markInboxDoneTx(tx *gorm.DB, eventID string) error 
 			"locked_until": nil,
 			"last_error":   "",
 			"updated_at":   now,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("inbox event %q was not marked done by lease owner %q", eventID, c.instanceID)
+	}
+	return nil
 }
 
 func (c *FileUploadConsumer) tryBeginInbox(ctx context.Context, eventID string, allowDLQRetry bool) (acquired bool, done bool, err error) {
@@ -520,7 +648,7 @@ func (c *FileUploadConsumer) tryBeginInbox(ctx context.Context, eventID string, 
 
 func (c *FileUploadConsumer) markInboxDLQ(ctx context.Context, eventID, errMsg string) error {
 	now := time.Now()
-	return internal.DB.WithContext(ctx).Model(&model.Inbox{}).
+	result := internal.DB.WithContext(ctx).Model(&model.Inbox{}).
 		Where("event_id = ? AND locked_by = ?", eventID, c.instanceID).
 		Updates(map[string]any{
 			"status":       model.InboxDLQ,
@@ -528,7 +656,14 @@ func (c *FileUploadConsumer) markInboxDLQ(ctx context.Context, eventID, errMsg s
 			"locked_until": nil,
 			"locked_by":    "",
 			"updated_at":   now,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("inbox event %q was not marked DLQ by lease owner %q", eventID, c.instanceID)
+	}
+	return nil
 }
 
 func isDupKey(err error) bool {

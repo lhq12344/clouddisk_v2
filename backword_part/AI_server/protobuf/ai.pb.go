@@ -183,7 +183,7 @@ const file_ai_proto_rawDesc = "" +
 	"\x04data\x18\x03 \x01(\tR\x04data21\n" +
 	"\tAIService\x12$\n" +
 	"\tAIrequest\x12\t.AI.AIReq\x1a\n" +
-	".AI.AIResp\"\x00B%Z#clouddisk_v2/file_srv/protobuf;aipbb\x06proto3"
+	".AI.AIResp\"\x00B#Z!clouddisk_v2/AI_srv/protobuf;aipbb\x06proto3"
 
 var (
 	file_ai_proto_rawDescOnce sync.Once

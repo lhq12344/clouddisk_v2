@@ -12,13 +12,9 @@
   "consul": {
     "host": "127.0.0.1",
     "port": "30500",
-    "account_srv": {
+    "storage_control": {
       "host": "127.0.0.1",
-      "port": 50051
-    },
-    "file_srv": {
-      "host": "127.0.0.1",
-      "port": 50052
+      "port": 50054
     },
     "mcp_srv": {
       "host": "127.0.0.1",

@@ -44,10 +44,11 @@ const (
 	OutboxFailed  OutboxStatus = "FAILED"
 )
 const (
-	LoadFile             = "LoadFile"
-	DownLoadFile         = "DownLoadFile"
-	FileScanRequested    = "FILE_SCAN_REQUESTED"
-	FileUploadEventTopic = "file.upload.cmd"
+	LoadFile              = "LoadFile"
+	DownLoadFile          = "DownLoadFile"
+	FileScanRequested     = "FILE_SCAN_REQUESTED"
+	ObjectDeleteRequested = "OBJECT_DELETE_REQUESTED"
+	FileUploadEventTopic  = "file.upload.cmd"
 )
 
 type DownloadCmdPayload struct {

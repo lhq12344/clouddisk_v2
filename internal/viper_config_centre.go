@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -54,7 +55,21 @@ func envBoolOrDefault(key string, fallback bool) bool {
 	return fallback
 }
 
+func runningGoTestBinary() bool {
+	return runningGoTestBinaryName(os.Args[0])
+}
+
+func runningGoTestBinaryName(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe")
+}
+
 func init() {
+	if envBoolOrDefault("CLOUDDISK_SKIP_BOOTSTRAP", false) || (runningGoTestBinary() && !envBoolOrDefault("CLOUDDISK_TEST_BOOTSTRAP", false)) {
+		Logger.Info("Skipping external infrastructure bootstrap")
+		return
+	}
+
 	v := viper.New()
 	v.SetConfigType("json")
 

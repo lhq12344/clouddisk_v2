@@ -11,7 +11,7 @@
   "smtp": {
     "url": "smtps://smtp.qq.com:465",
     "user": "1754004887@qq.com",
-    "pass": "romcmqsisbxgjjef",
+    "pass": "",
     "from": "1754004887@qq.com",
     "from_name": "CloudDisk"
   },

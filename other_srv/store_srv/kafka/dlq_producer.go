@@ -149,6 +149,9 @@ func (p *DLQProducer) SendToDLQ(ctx context.Context, msg *sarama.ConsumerMessage
 
 // persistToDB 持久化 DLQ 消息到数据库（事务中同时更新 Inbox）
 func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error {
+	if internal.DB == nil {
+		return fmt.Errorf("database is not initialized")
+	}
 	return internal.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. 创建 DLQ 失败记录
 		record := model.DLQFailure{
@@ -180,7 +183,7 @@ func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error
 
 		// 2. 更新 Inbox 状态为 DLQ，释放锁
 		if dlqMsg.EventID != "" {
-			err := tx.Model(&model.Inbox{}).
+			result := tx.Model(&model.Inbox{}).
 				Where("event_id = ?", dlqMsg.EventID).
 				Updates(map[string]interface{}{
 					"status":         model.InboxDLQ,
@@ -189,18 +192,17 @@ func (p *DLQProducer) persistToDB(ctx context.Context, dlqMsg *DLQMessage) error
 					"locked_by":      "",  // 释放锁
 					"locked_until":   nil, // 清除锁超时
 					"updated_at":     time.Now(),
-				}).Error
+				})
 
-			if err != nil {
-				p.logger.Warn("Failed to update Inbox status to DLQ",
-					zap.Error(err),
-					zap.String("event_id", dlqMsg.EventID))
-				// 不返回错误，因为 DLQ 记录已创建
-			} else {
-				p.logger.Info("Updated Inbox status to DLQ",
-					zap.String("event_id", dlqMsg.EventID),
-					zap.Uint("dlq_failure_id", record.ID))
+			if result.Error != nil {
+				return fmt.Errorf("failed to update Inbox status to DLQ: %w", result.Error)
 			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("failed to update Inbox status to DLQ: event %q affected %d rows", dlqMsg.EventID, result.RowsAffected)
+			}
+			p.logger.Info("Updated Inbox status to DLQ",
+				zap.String("event_id", dlqMsg.EventID),
+				zap.Uint("dlq_failure_id", record.ID))
 		}
 
 		return nil

@@ -2,8 +2,10 @@
 
 #include <drogon/HttpController.h>
 #include <drogon/RequestStream.h>
-#include "../../../proto/file_srv/file.grpc.pb.h"
+#include <functional>
+#include "../../../proto/storage_control/storage_control.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
+#include <memory>
 #include "../ArcCache/ArcCache.h"
 #include "../ArcCache/ARCtemp.h"
 #include "../../internal/internal.h"
@@ -18,13 +20,13 @@ class FileController : public drogon::HttpController<FileController>
 {
 private:
 	const int CAPACITY;
-	mutable Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<file::fileService>>> cache_;
-	std::shared_ptr<file::fileService::Stub> FindService(const std::string &key) const;
+	mutable Cache::KArcCache<std::string, std::shared_ptr<ArcGrpcLB::Entry<::storage_control::StorageControl>>> storageControlCache_;
+	std::shared_ptr<::storage_control::StorageControl::Stub> FindStorageControl(const std::string &key) const;
 
 public:
 	FileController()
 		: CAPACITY(20),
-		  cache_(CAPACITY) {};
+		  storageControlCache_(CAPACITY) {};
 	METHOD_LIST_BEGIN
 	// use METHOD_ADD to add your custom processing function here;
 	ADD_METHOD_TO(FileController::filequeryinfo, "/file/query", Post, "jwt_decode");

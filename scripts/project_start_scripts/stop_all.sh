@@ -21,6 +21,7 @@ NGINX_MODE_FILE="$PID_DIR/nginx.mode"
 DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
 CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
 K8S_NAMESPACE="infra"
+CORE_RUNTIME_PROFILE="${CORE_RUNTIME_PROFILE:-core}"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 停止所有服务${NC}"
@@ -119,8 +120,8 @@ main() {
     stop_service "mcp_srv"
     stop_service "ai_srv"
     stop_service "store_srv"
-    stop_service "file_srv"
-    stop_service "account_srv"
+    stop_service "storage_control"
+    stop_service "outbox_relay"
     if [ -x "$CLAMD_HELPER" ]; then
         echo -e "${YELLOW}停止 clamd_local...${NC}"
         "$CLAMD_HELPER" stop | sed 's/^/  /'

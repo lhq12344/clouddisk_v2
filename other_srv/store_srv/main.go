@@ -5,6 +5,7 @@ import (
 	"go_test/backword_part/model"
 	"go_test/internal"
 	"go_test/other_srv/store_srv/kafka"
+	"go_test/other_srv/store_srv/reconciliation"
 	"log"
 	"os"
 	"os/signal"
@@ -12,7 +13,37 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/minio/minio-go/v7"
 )
+
+type reconciliationObjectStore struct {
+	client *internal.MINIOClient
+}
+
+func (s reconciliationObjectStore) StatObject(ctx context.Context, objectKey string) error {
+	if s.client == nil || s.client.Client == nil {
+		return minio.ErrorResponse{Code: "ServiceUnavailable", Message: "minio client is not initialized"}
+	}
+	_, err := s.client.Client.StatObject(ctx, s.client.Bucket, objectKey, minio.StatObjectOptions{})
+	return err
+}
+
+func (s reconciliationObjectStore) ListObjectKeys(ctx context.Context, limit int) ([]string, bool, error) {
+	if s.client == nil || s.client.Client == nil {
+		return nil, false, minio.ErrorResponse{Code: "ServiceUnavailable", Message: "minio client is not initialized"}
+	}
+	keys := make([]string, 0, limit)
+	for object := range s.client.Client.ListObjects(ctx, s.client.Bucket, minio.ListObjectsOptions{Recursive: true}) {
+		if object.Err != nil {
+			return nil, false, object.Err
+		}
+		if len(keys) == limit {
+			return keys, true, nil
+		}
+		keys = append(keys, object.Key)
+	}
+	return keys, false, nil
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,6 +161,11 @@ func main() {
 			}
 		}
 	}()
+
+	// Reconciliation is audit-only for now. It reports stale workflow state
+	// and object/metadata drift without changing customer data.
+	reconciler := reconciliation.New(internal.DB, reconciliationObjectStore{client: internal.MinIOClient}, reconciliation.DefaultConfig())
+	go reconciler.Start(ctx)
 
 	log.Println("Store service started successfully")
 	log.Printf("Main topic: %s, DLQ topic: %s", mainTopic, dlqTopic)

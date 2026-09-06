@@ -19,11 +19,11 @@ type ConsulServiceConfig struct {
 }
 
 type ConsulConfig struct {
-	Host       string              `mapstructure:"host"`
-	Port       string              `mapstructure:"port"`
-	AccountSrv ConsulServiceConfig `mapstructure:"account_srv"`
-	FileSrv    ConsulServiceConfig `mapstructure:"file_srv"`
-	MCPSrv     ConsulServiceConfig `mapstructure:"mcp_srv"`
+	Host           string              `mapstructure:"host"`
+	Port           string              `mapstructure:"port"`
+	StorageControl ConsulServiceConfig `mapstructure:"storage_control"`
+	MCPSrv         ConsulServiceConfig `mapstructure:"mcp_srv"`
+	AISrv          ConsulServiceConfig `mapstructure:"ai_srv"`
 }
 
 var (

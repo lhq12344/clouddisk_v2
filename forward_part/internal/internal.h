@@ -10,8 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include "../logs/Logger.h"
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <cstdint>
 #include <grpcpp/grpcpp.h>
 
 struct ServerConfig
@@ -38,14 +37,14 @@ struct MysqlConfig
 	std::string port;
 	std::string user;
 	std::string password;
+	std::string database;
 };
 
 struct ConsulConfig
 {
 	std::string host;
 	std::string port;
-	ServerConfig account_srv;
-	ServerConfig file_srv;
+	ServerConfig storage_control;
 	ServerConfig gateway_srv;
 };
 
@@ -62,6 +61,8 @@ public:
 	ConsulConfig consul;
 	JWTConfig jwt;
 	KafkaConfig kafka;
+	std::string configSource;
+	std::string configVersion;
 	/// ---- 单例全局访问接口 ----
 	static AppConfig &getInstance()
 	{

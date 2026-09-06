@@ -5,13 +5,16 @@ Polyglot cloud storage platform: Go microservices (gRPC), C++ gateway/email serv
 ## Architecture Overview
 
 ```
-Client → OpenResty (:2024) → Go Gateway (Consul-discovered)
-                                ├── account_srv (gRPC) — auth, signup, JWT
-                                ├── file_srv    (gRPC) — upload/download/delete, multipart
-                                ├── AI_srv      (gRPC) — AI features
-                                └── mcp_server  (MCP)  — tool server for AI agents
+Client → OpenResty (:2024) → C++ Drogon Core API (Consul-discovered)
+                                ├── Account / Auth / JWT lifecycle
+                                ├── File metadata / permission / delete
+                                ├── Upload orchestration + MySQL transaction + Outbox
+                                ├── Storage Control (gRPC) — narrow MinIO/S3 control plane
+                                ├── AI_srv (gRPC) — AI features
+                                └── mcp_server (MCP) — tool server for AI agents
 
-file_srv → Kafka (outbox pattern) → store_srv (consumer) → MinIO/AliOSS
+Client ── presigned PUT/GET ──> MinIO/AliOSS
+Core API → Outbox relay → Kafka → store_srv/storage-worker → scan/cleanup/reconcile
 email_srv (C++) ← Kafka — email notifications
 ```
 
@@ -21,15 +24,15 @@ email_srv (C++) ← Kafka — email notifications
 
 ```bash
 # Build individual services
-go build -o bin/account_srv ./backword_part/account_server/account_srv/
-go build -o bin/file_srv    ./backword_part/file_server/file_srv/
+go build -o bin/storage_control ./backword_part/storage_control/
+go build -o bin/outbox_relay    ./backword_part/outbox_relay/
 go build -o bin/ai_srv      ./backword_part/AI_server/
 go build -o bin/mcp_server  ./backword_part/mcp_server/
 go build -o bin/store_srv   ./other_srv/store_srv/
 
 # Run a service directly
-go run ./backword_part/account_server/account_srv/
-go run ./backword_part/file_server/file_srv/
+go run ./backword_part/storage_control/
+go run ./backword_part/outbox_relay/
 go run ./other_srv/store_srv/
 
 # Run all Go tests
@@ -77,8 +80,7 @@ ctest --output-on-failure
 
 ```bash
 # From proto/ directory — generate Go stubs
-protoc --go_out=. --go-grpc_out=. proto/account_srv/account.proto
-protoc --go_out=. --go-grpc_out=. proto/file_srv/file.proto
+protoc --go_out=. --go-grpc_out=. proto/storage_control/storage_control.proto
 protoc --go_out=. --go-grpc_out=. proto/AI_srv/ai.proto
 ```
 
@@ -91,7 +93,7 @@ protoc --go_out=. --go-grpc_out=. proto/AI_srv/ai.proto
 ### Multipart Upload Testing
 
 ```bash
-go run test/mputest.go -addr 127.0.0.1:50051 -file ./big.bin -user_id 1001 -parallel 4
+go run test/mputest.go -addr 127.0.0.1:50054 -file ./big.bin -user_id 1001 -parallel 4
 ```
 
 ## Code Style & Conventions
@@ -110,7 +112,7 @@ go run test/mputest.go -addr 127.0.0.1:50051 -file ./big.bin -user_id 1001 -para
 - **Error handling**: Return `(result, error)` pairs. Use `fmt.Errorf` with `[FuncName]` prefix for context: `fmt.Errorf("[Download]account not found")`. Use `github.com/pkg/errors` for wrapping. Check `gorm.ErrRecordNotFound` with `errors.Is()`.
 - **Logging**: `go.uber.org/zap` structured logger. Use `log.Logger.Info/Error/Warn()` with `zap.String()`, `zap.Error()` fields. Two logger packages exist: `go_test/backword_part/log` and `go_test/internal` — each service uses its own.
 - **Database**: GORM with MySQL. Models embed `gorm.Model`. Use `gorm:` struct tags. Transactions via `db.Transaction(func(tx *gorm.DB) error { ... })`. Upserts via `clause.OnConflict`.
-- **Config**: Nacos config center → Viper unmarshaling → `internal.ViperConf` global. Hot-reload via `client.ListenConfig`. Init chain in `internal/viper_config_centre.go` `init()`.
+- **Config**: Nacos config center → Viper unmarshaling → `internal.ViperConf` global. Hot-reload via `client.ListenConfig`. Init chain in `internal/viper_config_centre.go` `init()`. Unit tests skip external bootstrap by default; set `CLOUDDISK_TEST_BOOTSTRAP=1` only for integration tests that intentionally hit Nacos/MySQL/Redis/Kafka/MinIO.
 - **Service pattern**: Each gRPC service has `main.go` with `ListenAutoPort()` → `grpc.NewServer()` → register service → register to Consul → `Serve()` → `ElegantExit()`.
 - **Protobuf**: Server structs embed `Unimplemented*Server`. Implementation in `protobuf/*.go` files alongside generated code.
 - **Global clients**: `internal.DB`, `internal.RedisClient`, `internal.MinIOClient`, `internal.KafkaProducer`, `internal.ConsulClient`, `internal.OssClient` — all initialized in `init()`.
@@ -191,11 +193,11 @@ for _, tt := range tests {
 
 ## Key Patterns to Follow
 
-1. **New gRPC service**: Copy existing service pattern from `backword_part/account_server/` — create `main.go` with `ListenAutoPort`, register to Consul, implement proto interface
-2. **New API endpoint**: Add proto message/RPC → regenerate → implement in `protobuf/*.go` → add Nginx location block
+1. **New Core API endpoint**: Add/extend Drogon controller DTO mapping, call a domain/application service, and keep SQL/object-store SDKs behind infrastructure ports
+2. **New Storage Control RPC**: Add proto message/RPC only for object-storage control commands, regenerate stubs, and keep user permission/metadata decisions in Core API
 3. **New frontend feature**: Add types to `types.ts`, API method to `services/api.ts`, component in `components/`
-4. **Async file operations**: Use outbox pattern — write to `Outbox` table in transaction, dispatcher sends to Kafka, `store_srv` consumer processes
-5. **Error codes in gRPC responses**: `Code: 0` = success, non-zero = error. Error messages in `Message` field. Custom errors in `custom_error` package.
+4. **Async file operations**: Use outbox pattern — Core API writes `Outbox` in the same MySQL transaction, `outbox_relay` sends to Kafka, `store_srv`/storage-worker processes with Inbox/DLQ
+5. **Legacy account/file services**: `account_srv`, business-shaped `file_srv`, and their proto directories are retired; explicit legacy feature-flag values must fail closed rather than resurrect old services
 
 ## Infrastructure Dependencies
 

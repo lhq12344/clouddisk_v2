@@ -36,6 +36,7 @@ DOCKER_OPENRESTY_IMAGE="${DOCKER_OPENRESTY_IMAGE:-swr.cn-north-4.myhuaweicloud.c
 DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
 CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
 K8S_RUNTIME_RECONCILER="$PROJECT_ROOT/scripts/project_start_scripts/reconcile_k8s_runtime.sh"
+CORE_RUNTIME_PROFILE="${CORE_RUNTIME_PROFILE:-core}"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 一键启动脚本${NC}"
@@ -99,6 +100,55 @@ listening_pid_for_port() {
     if command -v ss > /dev/null 2>&1; then
         ss -ltnp 2>/dev/null | awk -v port=":${port}" '$4 ~ port { if (match($NF, /pid=([0-9]+)/, m)) { print m[1]; exit } }'
     fi
+}
+
+runtime_services() {
+    echo "gateway outbox_relay storage_control store_srv ai_srv mcp_srv frontend"
+}
+
+configure_core_feature_flags() {
+    case "$CORE_RUNTIME_PROFILE" in
+        legacy)
+            : "${CORE_ACCOUNT_READS:=legacy}"
+            : "${CORE_ACCOUNT_LOGIN:=legacy}"
+            : "${CORE_ACCOUNT_REGISTRATION:=legacy}"
+            : "${CORE_FILE_READS:=legacy}"
+            : "${CORE_FILE_ACCESS:=legacy}"
+            : "${CORE_UPLOAD_CONTROL:=legacy}"
+            : "${CORE_UPLOAD_COMPLETE:=legacy}"
+            : "${CORE_FILE_DELETE:=legacy}"
+            : "${CORE_SMALL_UPLOAD_DIRECT:=legacy}"
+            : "${CORE_OUTBOX_RELAY:=legacy}"
+            ;;
+        mixed)
+            : "${CORE_ACCOUNT_READS:=shadow}"
+            : "${CORE_ACCOUNT_LOGIN:=core}"
+            : "${CORE_ACCOUNT_REGISTRATION:=core}"
+            : "${CORE_FILE_READS:=shadow}"
+            : "${CORE_FILE_ACCESS:=shadow}"
+            : "${CORE_UPLOAD_CONTROL:=shadow}"
+            : "${CORE_UPLOAD_COMPLETE:=core}"
+            : "${CORE_FILE_DELETE:=core}"
+            : "${CORE_SMALL_UPLOAD_DIRECT:=core}"
+            : "${CORE_OUTBOX_RELAY:=core}"
+            ;;
+        core|*)
+            : "${CORE_ACCOUNT_READS:=core}"
+            : "${CORE_ACCOUNT_LOGIN:=core}"
+            : "${CORE_ACCOUNT_REGISTRATION:=core}"
+            : "${CORE_FILE_READS:=core}"
+            : "${CORE_FILE_ACCESS:=core}"
+            : "${CORE_UPLOAD_CONTROL:=core}"
+            : "${CORE_UPLOAD_COMPLETE:=core}"
+            : "${CORE_FILE_DELETE:=core}"
+            : "${CORE_SMALL_UPLOAD_DIRECT:=core}"
+            : "${CORE_OUTBOX_RELAY:=core}"
+            ;;
+    esac
+
+    export CORE_ACCOUNT_READS CORE_ACCOUNT_LOGIN CORE_ACCOUNT_REGISTRATION
+    export CORE_FILE_READS CORE_FILE_ACCESS CORE_UPLOAD_CONTROL CORE_UPLOAD_COMPLETE
+    export CORE_FILE_DELETE CORE_SMALL_UPLOAD_DIRECT CORE_OUTBOX_RELAY
 }
 
 k8s_openresty_running() {
@@ -490,35 +540,37 @@ start_cpp_gateway() {
 # 启动 Go 微服务
 start_go_services() {
     echo -e "${YELLOW}[4/7] 启动 Go 微服务...${NC}"
+    echo -e "  运行拓扑: ${CORE_RUNTIME_PROFILE}"
 
     if [ -x "$CLAMD_HELPER" ] && command -v clamd > /dev/null 2>&1; then
         echo -e "  启动 clamd_local..."
         "$CLAMD_HELPER" start | sed 's/^/    /'
     fi
 
-    # Account Service
-    if service_pid_running "account_srv"; then
-        echo -e "${GREEN}  ✓ account_srv 已在运行，跳过重复启动${NC}"
+    echo -e "${YELLOW}  ○ Core profile: legacy account/file services are retired${NC}"
+
+    # Outbox Relay Service
+    if service_pid_running "outbox_relay"; then
+        echo -e "${GREEN}  ✓ outbox_relay 已在运行，跳过重复启动${NC}"
     else
-        echo -e "  启动 account_srv..."
-        cd "$PROJECT_ROOT"
-        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/account_server/account_srv/ > "$LOG_DIR/account_srv.log" 2>&1 &
-        ACCOUNT_PID=$!
-        echo $ACCOUNT_PID > "$PID_DIR/account_srv.pid"
-        echo -e "${GREEN}    ✓ account_srv (PID: $ACCOUNT_PID)${NC}"
+        echo -e "  启动 outbox_relay..."
+        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/outbox_relay/ > "$LOG_DIR/outbox_relay.log" 2>&1 &
+        OUTBOX_RELAY_PID=$!
+        echo $OUTBOX_RELAY_PID > "$PID_DIR/outbox_relay.pid"
+        echo -e "${GREEN}    ✓ outbox_relay (PID: $OUTBOX_RELAY_PID)${NC}"
     fi
 
     sleep 2
 
-    # File Service
-    if service_pid_running "file_srv"; then
-        echo -e "${GREEN}  ✓ file_srv 已在运行，跳过重复启动${NC}"
+    # Storage Control Service
+    if service_pid_running "storage_control"; then
+        echo -e "${GREEN}  ✓ storage_control 已在运行，跳过重复启动${NC}"
     else
-        echo -e "  启动 file_srv..."
-        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/file_server/file_srv/ > "$LOG_DIR/file_srv.log" 2>&1 &
-        FILE_PID=$!
-        echo $FILE_PID > "$PID_DIR/file_srv.pid"
-        echo -e "${GREEN}    ✓ file_srv (PID: $FILE_PID)${NC}"
+        echo -e "  启动 storage_control..."
+        nohup env GOCACHE="$GO_CACHE_DIR" go run ./backword_part/storage_control/ > "$LOG_DIR/storage_control.log" 2>&1 &
+        STORAGE_CONTROL_PID=$!
+        echo $STORAGE_CONTROL_PID > "$PID_DIR/storage_control.pid"
+        echo -e "${GREEN}    ✓ storage_control (PID: $STORAGE_CONTROL_PID)${NC}"
     fi
 
     sleep 2
@@ -632,7 +684,7 @@ show_status() {
     echo -e "${BLUE}----------------------------------------${NC}"
 
     # 检查各个服务
-    for service in gateway account_srv file_srv store_srv ai_srv mcp_srv frontend; do
+    for service in $(runtime_services); do
         PID_FILE="$PID_DIR/${service}.pid"
         if [ -f "$PID_FILE" ]; then
             PID=$(cat "$PID_FILE")
@@ -704,8 +756,8 @@ show_info() {
     echo -e "${BLUE}  日志文件:${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "  $LOG_DIR/gateway.log"
-    echo -e "  $LOG_DIR/account_srv.log"
-    echo -e "  $LOG_DIR/file_srv.log"
+    echo -e "  $LOG_DIR/outbox_relay.log"
+    echo -e "  $LOG_DIR/storage_control.log"
     echo -e "  $LOG_DIR/store_srv.log"
     echo -e "  $LOG_DIR/frontend.log"
     echo ""
@@ -724,6 +776,7 @@ show_info() {
 
 # 主流程
 main() {
+    configure_core_feature_flags
     reconcile_k8s_runtime
     check_infrastructure
     check_dependencies

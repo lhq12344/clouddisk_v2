@@ -59,6 +59,7 @@ export interface UploadResponse {
 }
 
 export interface CompleteMultipartResponse {
+  upload_id: string;
   object_key: string;
   etag: string;
   status: string;

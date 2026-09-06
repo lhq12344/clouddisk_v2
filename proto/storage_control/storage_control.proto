@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package storage_control;
+option go_package = "clouddisk_v2/storage_control/protobuf;storagecontrolpb";
+
+message InitiateMultipartReq {
+  string object_key = 1;
+  string content_type = 2;
+  map<string, string> metadata = 3;
+}
+
+message InitiateMultipartResp {
+  string storage_upload_id = 1;
+}
+
+message PresignPartReq {
+  string object_key = 1;
+  string storage_upload_id = 2;
+  int32 part_number = 3;
+  int64 expires_seconds = 4;
+}
+
+message PresignPartResp {
+  string url = 1;
+  string expires_at = 2;
+}
+
+message UploadedPart {
+  int32 part_number = 1;
+  string etag = 2;
+}
+
+message ListPartsReq {
+  string object_key = 1;
+  string storage_upload_id = 2;
+}
+
+message ListPartsResp {
+  repeated UploadedPart parts = 1;
+}
+
+message CompleteMultipartReq {
+  string object_key = 1;
+  string storage_upload_id = 2;
+  string content_type = 3;
+  repeated UploadedPart parts = 4;
+}
+
+message CompleteMultipartResp {
+  string object_key = 1;
+  string etag = 2;
+}
+
+message AbortMultipartReq {
+  string object_key = 1;
+  string storage_upload_id = 2;
+}
+
+message AbortMultipartResp {}
+
+message PresignGetReq {
+  string object_key = 1;
+  string filename = 2;
+  string content_type = 3;
+  bool inline_disposition = 4;
+  int64 expires_seconds = 5;
+}
+
+message PresignGetResp {
+  string url = 1;
+}
+
+message HeadObjectReq {
+  string object_key = 1;
+}
+
+message HeadObjectResp {
+  bool exists = 1;
+  int64 size = 2;
+  string etag = 3;
+  string content_type = 4;
+}
+
+service StorageControl {
+  rpc InitiateMultipart(InitiateMultipartReq) returns (InitiateMultipartResp);
+  rpc PresignPart(PresignPartReq) returns (PresignPartResp);
+  rpc ListParts(ListPartsReq) returns (ListPartsResp);
+  rpc CompleteMultipart(CompleteMultipartReq) returns (CompleteMultipartResp);
+  rpc AbortMultipart(AbortMultipartReq) returns (AbortMultipartResp);
+  rpc PresignGet(PresignGetReq) returns (PresignGetResp);
+  rpc HeadObject(HeadObjectReq) returns (HeadObjectResp);
+}

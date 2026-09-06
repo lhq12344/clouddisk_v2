@@ -1,13 +1,20 @@
 #include <drogon/drogon.h>
+#include <drogon/orm/DbClient.h>
 #include <cstdlib>
+#include <sstream>
 #include "../internal/internal.h"
 #include "ConsulRegister.h"
 #include "MyAppData.h"
+#include "infrastructure/runtime/CoreRuntime.h"
 int main()
 {
 	// 获取ip和port
 	InitAppConfig();
 	auto &cfg = AppConfig::getInstance();
+	core::infrastructure::runtime::CoreRuntime::instance().initialize(
+		cfg,
+		cfg.configSource,
+		cfg.configVersion);
 	std::string registerHost = cfg.consul.gateway_srv.host; // 注册到 Consul 的地址
 	std::string listenHost = "0.0.0.0"; // 监听地址
 	int port = std::atoi(cfg.consul.gateway_srv.port.c_str());
@@ -23,6 +30,14 @@ int main()
 	std::string redisHost = cfg.redis.host;
 	int redisPort = std::atoi(cfg.redis.port.c_str());
 	drogon::app().createRedisClient(redisHost, redisPort);
+	std::ostringstream mysqlConn;
+	mysqlConn << "host=" << cfg.mysql.host
+			  << " port=" << cfg.mysql.port
+			  << " dbname=" << cfg.mysql.database
+			  << " user=" << cfg.mysql.user
+			  << " password=" << cfg.mysql.password;
+	auto mysqlClient = drogon::orm::DbClient::newMysqlClient(mysqlConn.str(), 2);
+	LOG_INFO("[runtime] Core API readiness initialized: {}", core::infrastructure::runtime::CoreRuntime::instance().ready() ? "ready" : "not_ready");
 	std::string serviceName = "gateway_srv";
 	std::string serviceId = serviceName + std::to_string(port);
 	ConsulRegister consulRegister(
@@ -46,6 +61,7 @@ int main()
 											MyAppData::instance().kafkaHost = kafkaHost;
 											MyAppData::instance().kafkaPort = kafkaPort;
 											MyAppData::instance().SigningKey = SigningKey;
+											MyAppData::instance().mysqlClient = mysqlClient;
 
 											// 延迟注册，确保事件循环已启动
 											drogon::app().getLoop()->queueInLoop([&consulRegister]() {

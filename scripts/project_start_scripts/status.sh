@@ -19,6 +19,7 @@ LOG_DIR="$PROJECT_ROOT/log"
 NGINX_MODE_FILE="$PID_DIR/nginx.mode"
 DOCKER_OPENRESTY_CONTAINER="${DOCKER_OPENRESTY_CONTAINER:-clouddisk_v2_openresty}"
 CLAMD_HELPER="$PROJECT_ROOT/scripts/project_start_scripts/clamd_local.sh"
+CORE_RUNTIME_PROFILE="${CORE_RUNTIME_PROFILE:-core}"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  CloudDisk V2 服务状态${NC}"
@@ -193,8 +194,9 @@ main() {
     check_service "gateway"
 
     # 检查 Go 微服务
-    check_service "account_srv"
-    check_service "file_srv"
+    echo -e "${BLUE}运行拓扑: ${CORE_RUNTIME_PROFILE} (legacy account/file services retired)${NC}"
+    check_service "outbox_relay"
+    check_service "storage_control"
     check_service "store_srv"
     check_service "ai_srv"
     check_service "mcp_srv"
@@ -207,8 +209,8 @@ main() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
 
-    # 检查常用端口
-    for port in 2024 3000 3001 8080 50051 50052; do
+    # 检查常用固定端口；storage_control/AI_srv 使用 Consul 注册的动态 gRPC 端口
+    for port in 2024 3000 3001 38080 50053; do
         if netstat -tuln 2>/dev/null | grep -q ":$port " || ss -tuln 2>/dev/null | grep -q ":$port "; then
             echo -e "${GREEN}  ✓ 端口 $port 正在监听${NC}"
         else

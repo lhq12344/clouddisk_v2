@@ -5,8 +5,33 @@
 #include "emailsend.h"
 #include "emailServer.h"
 #include <librdkafka/rdkafka.h>
+#include <nlohmann/json.hpp>
+
+#include <atomic>
+#include <exception>
+#include <stdexcept>
 
 static std::atomic<bool> g_running{true};
+
+static string extract_email_task_payload(const string &payload)
+{
+	if (!payload.empty() && payload.front() == '{')
+	{
+		try
+		{
+			auto parsed = nlohmann::json::parse(payload);
+			if (parsed.contains("email") && parsed["email"].is_string())
+			{
+				return parsed["email"].get<string>();
+			}
+		}
+		catch (const std::exception &)
+		{
+			// Fall through to legacy raw payload handling.
+		}
+	}
+	return payload;
+}
 
 class KafkaConsumer
 {
@@ -98,7 +123,8 @@ public:
 			// 正常消息
 			if (rkmessage->payload && rkmessage->len > 0)
 			{
-				string email((char *)rkmessage->payload, rkmessage->len);
+				string payload((char *)rkmessage->payload, rkmessage->len);
+				string email = extract_email_task_payload(payload);
 				// 你目前是把 email 当纯字符串发过来的，这里兼容一下 %40 -> @
 				size_t pos = email.find("%40");
 				if (pos != string::npos)

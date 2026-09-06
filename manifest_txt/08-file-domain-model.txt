@@ -1,3 +1,7 @@
+# Archived pre-Core-migration snapshot
+
+> This manifest was produced before the Core API responsibility refactor. It is retained as historical reading material only. For the current topology and commands, use `AGENTS.md`, `docs/adr/0001-core-api-responsibility-boundaries.md`, and `docs/contracts/core-migration-completion-audit.md`.
+
 # 08. 文件领域模型：File、UserFile、Outbox、Inbox、DLQ
 
 ## 本章定位

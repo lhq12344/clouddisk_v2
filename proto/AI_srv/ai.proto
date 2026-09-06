@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package AI;
-option go_package = "clouddisk_v2/file_srv/protobuf;aipb";
+option go_package = "clouddisk_v2/AI_srv/protobuf;aipb";
 
 message AIReq{
   string username  = 1;

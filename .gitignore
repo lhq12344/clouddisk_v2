@@ -5,6 +5,23 @@
 *.so
 *.dylib
 *.md
+!docs/
+!docs/adr/
+!docs/adr/*.md
+!docs/contracts/
+!docs/contracts/*.md
+!docs/adr/0001-core-api-responsibility-boundaries.md
+!docs/contracts/core-http-contract.md
+!docs/contracts/core-feature-flags.md
+!docs/contracts/core-baseline-runbook.md
+!docs/contracts/phase-0-review.md
+!docs/contracts/phase-1-review.md
+!docs/contracts/phase-2-review.md
+!docs/contracts/phase-3-review.md
+!docs/contracts/phase-4-review.md
+!docs/contracts/phase-5-review.md
+!backword_part/storage_control/
+!backword_part/storage_control/README.md
 # Test binary
 *.test
 *.claude

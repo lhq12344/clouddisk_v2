@@ -4,6 +4,8 @@
 #include "config/config.h"
 #include <curl/curl.h>
 
+#include <cstring>
+
 struct CurlPayload
 {
     const string *data;

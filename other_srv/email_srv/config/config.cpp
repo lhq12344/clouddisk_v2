@@ -1,16 +1,48 @@
 #include "config.h"
+
+#include <cstdlib>
+#include <exception>
 #include <fstream>
+#include <sstream>
 
 using json = nlohmann::json;
 using namespace nacos;
+
+namespace
+{
+std::string envString(const char *name)
+{
+	const char *value = std::getenv(name);
+	return value == nullptr ? "" : std::string(value);
+}
+
+void applyEnvironmentOverrides(AppConfig &cfg)
+{
+	const auto smtpURL = envString("EMAIL_SMTP_URL");
+	const auto smtpUser = envString("EMAIL_SMTP_USER");
+	const auto smtpPass = envString("EMAIL_SMTP_PASS");
+	const auto smtpFrom = envString("EMAIL_SMTP_FROM");
+	const auto smtpFromName = envString("EMAIL_SMTP_FROM_NAME");
+
+	if (!smtpURL.empty())
+		cfg.smtp.url = smtpURL;
+	if (!smtpUser.empty())
+		cfg.smtp.user = smtpUser;
+	if (!smtpPass.empty())
+		cfg.smtp.pass = smtpPass;
+	if (!smtpFrom.empty())
+		cfg.smtp.from = smtpFrom;
+	if (!smtpFromName.empty())
+		cfg.smtp.from_name = smtpFromName;
+}
+}
 
 class ConfigListener : public Listener
 {
 public:
 	void receiveConfigInfo(const std::string &configInfo)
 	{
-		std::cout << "[Nacos] Config updated:\n"
-				  << configInfo << std::endl;
+		std::cout << "[Nacos] Config updated (bytes=" << configInfo.size() << ")" << std::endl;
 		LoadConfigFromString(configInfo);
 	}
 
@@ -36,6 +68,8 @@ public:
 
 			cfg.email.code_ttl_sec = j["email"]["code_ttl_sec"];
 			cfg.email.dedup_ttl_sec = j["email"]["dedup_ttl_sec"];
+
+			applyEnvironmentOverrides(cfg);
 
 			std::cout << "[Nacos] Config parsed successfully\n";
 		}
@@ -85,7 +119,7 @@ void InitAppConfig()
 		content = configSvc->getConfig("email_config.json", "dev", 5000);
 		if (!content.empty())
 		{
-			std::cout << "[Nacos] Initial config:\n" << content << std::endl;
+			std::cout << "[Nacos] Initial config loaded (bytes=" << content.size() << ")" << std::endl;
 			ConfigListener::LoadConfigFromString(content);
 			nacosOk = true;
 		}

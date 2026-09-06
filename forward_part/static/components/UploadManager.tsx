@@ -12,7 +12,6 @@ interface MultipartSession {
   total_parts: number;
 }
 
-const SIMPLE_UPLOAD_THRESHOLD = 5 * 1024 * 1024;
 const PART_PARALLELISM = 2;
 const MULTIPART_SESSION_KEY = 'multipart_upload_sessions';
 
@@ -144,7 +143,7 @@ export const UploadManager: React.FC<UploadManagerProps> = ({ onComplete }) => {
       }
       throw err;
     }
-    if (init.status && init.status !== 'init') {
+    if (init.status && init.status !== 'init' && init.status !== 'initiated') {
       throw Object.assign(new Error(init.message || init.status), { uploadResponse: init });
     }
     if (!init.upload_id || !init.part_size || !init.total_parts) {
@@ -224,28 +223,14 @@ export const UploadManager: React.FC<UploadManagerProps> = ({ onComplete }) => {
       const fileHash = await calculateHash(fullFileBuffer);
       updateTask(taskId, { fileHash });
 
-      if (file.size < SIMPLE_UPLOAD_THRESHOLD) {
-        try {
-          const response = await api.simpleUpload(file, file.name, fileHash, file.type);
-          updateTaskFromUploadResponse(taskId, response);
-        } catch (err: any) {
-          const uploadResponse = uploadResponseFromError(err);
-          if (uploadResponse) {
-            updateTaskFromUploadResponse(taskId, uploadResponse);
-            return;
-          }
-          throw err;
+      try {
+        await uploadMultipart(file, fileHash, taskId);
+      } catch (err: any) {
+        if (err?.uploadResponse) {
+          updateTaskFromUploadResponse(taskId, err.uploadResponse, 100);
+          return;
         }
-      } else {
-        try {
-          await uploadMultipart(file, fileHash, taskId);
-        } catch (err: any) {
-          if (err?.uploadResponse) {
-            updateTaskFromUploadResponse(taskId, err.uploadResponse, 100);
-            return;
-          }
-          throw err;
-        }
+        throw err;
       }
 
       onComplete();

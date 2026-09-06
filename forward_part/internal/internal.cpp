@@ -1,4 +1,16 @@
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 #include "internal.h"
+
+#include <cstdlib>
+
+#ifndef _WIN32
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using json = nlohmann::json;
 using namespace nacos;
@@ -25,6 +37,12 @@ namespace
 		}
 		return value.dump();
 	}
+
+	std::string envString(const char *name)
+	{
+		const char *value = std::getenv(name);
+		return value == nullptr ? "" : std::string(value);
+	}
 }
 
 class ConfigListener : public Listener
@@ -32,8 +50,7 @@ class ConfigListener : public Listener
 public:
 	void receiveConfigInfo(const std::string &configInfo)
 	{
-		std::cout << "[Nacos] Config updated:\n"
-				  << configInfo << std::endl;
+		std::cout << "[Nacos] Config updated (bytes=" << configInfo.size() << ")" << std::endl;
 		LoadConfigFromString(configInfo);
 	}
 
@@ -54,17 +71,34 @@ public:
 			cfg.mysql.port = jsonToString(j["mysql"]["port"]);
 			cfg.mysql.user = jsonToString(j["mysql"]["user"]);
 			cfg.mysql.password = jsonToString(j["mysql"]["password"]);
+			if (j["mysql"].contains("database"))
+			{
+				cfg.mysql.database = jsonToString(j["mysql"]["database"]);
+			}
+			else if (j["mysql"].contains("dbname"))
+			{
+				cfg.mysql.database = jsonToString(j["mysql"]["dbname"]);
+			}
+			else
+			{
+				cfg.mysql.database = "clouddisk";
+			}
 
 			cfg.consul.host = jsonToString(j["consul"]["host"]);
 			cfg.consul.port = jsonToString(j["consul"]["port"]);
-			cfg.consul.account_srv.host = jsonToString(j["consul"]["account_srv"]["host"]);
-			cfg.consul.account_srv.port = jsonToString(j["consul"]["account_srv"]["port"]);
-			cfg.consul.file_srv.host = jsonToString(j["consul"]["file_srv"]["host"]);
-			cfg.consul.file_srv.port = jsonToString(j["consul"]["file_srv"]["port"]);
+			if (j["consul"].contains("storage_control"))
+			{
+				cfg.consul.storage_control.host = jsonToString(j["consul"]["storage_control"]["host"]);
+				cfg.consul.storage_control.port = jsonToString(j["consul"]["storage_control"]["port"]);
+			}
 			cfg.consul.gateway_srv.host = jsonToString(j["consul"]["gateway_srv"]["host"]);
 			cfg.consul.gateway_srv.port = jsonToString(j["consul"]["gateway_srv"]["port"]);
 
 			cfg.jwt.secret = jsonToString(j["jwt"]["signing_key"]);
+			if (cfg.configVersion.empty())
+			{
+				cfg.configVersion = "local-file";
+			}
 
 			std::cout << "[Nacos] Config parsed successfully\n";
 		}
@@ -79,28 +113,44 @@ void InitAppConfig()
 {
 	try
 	{
-		// 使用本地配置文件（避免 Nacos C++ SDK 兼容性问题）
-		std::string configFile = "config.json";
-
-		// 尝试多个可能的配置文件路径
-		std::vector<std::string> possiblePaths = {
-			"config.json",
-			"../config.json",
-			"/home/lihaoqian/project/clouddisk_v2/forward_part/gateway/config.json"
-		};
-
 		std::string configContent;
+		std::string loadedPath;
 		bool found = false;
 
-		for (const auto& path : possiblePaths) {
-			std::ifstream file(path);
-			if (file.is_open()) {
-				std::stringstream buffer;
-				buffer << file.rdbuf();
-				configContent = buffer.str();
-				found = true;
-				std::cout << "[Config] Loaded from: " << path << std::endl;
-				break;
+		const auto envConfigJson = envString("CLOUDDISK_CONFIG_JSON");
+		if (!envConfigJson.empty())
+		{
+			configContent = envConfigJson;
+			loadedPath = "env:CLOUDDISK_CONFIG_JSON";
+			found = true;
+			std::cout << "[Config] Loaded from CLOUDDISK_CONFIG_JSON" << std::endl;
+		}
+
+		std::vector<std::string> possiblePaths;
+		const auto envConfigFile = envString("CLOUDDISK_CONFIG_FILE");
+		if (!envConfigFile.empty())
+		{
+			possiblePaths.push_back(envConfigFile);
+		}
+		possiblePaths.push_back("config.json");
+		possiblePaths.push_back("../config.json");
+		possiblePaths.push_back("/home/lihaoqian/project/clouddisk_v2/forward_part/gateway/config.json");
+
+		if (!found)
+		{
+			for (const auto &path : possiblePaths)
+			{
+				std::ifstream file(path);
+				if (file.is_open())
+				{
+					std::stringstream buffer;
+					buffer << file.rdbuf();
+					configContent = buffer.str();
+					loadedPath = path;
+					found = true;
+					std::cout << "[Config] Loaded from: " << path << std::endl;
+					break;
+				}
 			}
 		}
 
@@ -118,6 +168,9 @@ void InitAppConfig()
 		}
 
 		std::cout << "[Config] Loaded successfully" << std::endl;
+		AppConfig::getInstance().configSource = loadedPath;
+		const auto envConfigVersion = envString("CLOUDDISK_CONFIG_VERSION");
+		AppConfig::getInstance().configVersion = envConfigVersion.empty() ? loadedPath : envConfigVersion;
 		ConfigListener::LoadConfigFromString(configContent);
 	}
 	catch (std::exception &e)
@@ -135,6 +188,45 @@ void InitAppConfig()
 // 获取未占用的port
 int GetFreePort()
 {
+#ifdef _WIN32
+	WSADATA wsaData;
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+	{
+		return -1;
+	}
+
+	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock == INVALID_SOCKET)
+	{
+		WSACleanup();
+		return -1;
+	}
+
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin_port = 0; // 让 OS 自动选择可用端口
+
+	if (bind(sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR)
+	{
+		closesocket(sock);
+		WSACleanup();
+		return -1;
+	}
+
+	int len = sizeof(addr);
+	if (getsockname(sock, reinterpret_cast<sockaddr *>(&addr), &len) == SOCKET_ERROR)
+	{
+		closesocket(sock);
+		WSACleanup();
+		return -1;
+	}
+
+	int port = ntohs(addr.sin_port);
+	closesocket(sock);
+	WSACleanup();
+	return port;
+#else
 	int sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (sock < 0)
 		return -1;
@@ -160,4 +252,5 @@ int GetFreePort()
 	int port = ntohs(addr.sin_port);
 	close(sock);
 	return port;
+#endif
 }

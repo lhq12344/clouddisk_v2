@@ -11,27 +11,30 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
-	pb "go_test/backword_part/file_server/file_srv/protobuf"
+	storagecontrolpb "go_test/clouddisk_v2/storage_control/protobuf"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
+const defaultPartSize = 10 * 1024 * 1024
+
 type State struct {
-	UploadID    string `json:"upload_id"`
-	ObjectKey   string `json:"object_key"`
-	PartSize    int64  `json:"part_size"`
-	TotalParts  int32  `json:"total_parts"`
-	FilePath    string `json:"file_path"`
-	FileName    string `json:"file_name"`
-	FileSize    int64  `json:"file_size"`
-	UserID      string `json:"user_id"`
-	ContentType string `json:"content_type"`
-	FileHash    string `json:"file_hash"`
+	StorageUploadID string `json:"storage_upload_id"`
+	ObjectKey       string `json:"object_key"`
+	PartSize        int64  `json:"part_size"`
+	TotalParts      int32  `json:"total_parts"`
+	FilePath        string `json:"file_path"`
+	FileName        string `json:"file_name"`
+	FileSize        int64  `json:"file_size"`
+	UserID          string `json:"user_id"`
+	ContentType     string `json:"content_type"`
+	FileHash        string `json:"file_hash"`
 }
 
 func loadState(path string) (*State, error) {
@@ -55,7 +58,7 @@ func saveState(path string, st *State) error {
 	return os.Rename(tmp, path)
 }
 
-func withUserID(ctx context.Context, userID string) context.Context {
+func withRequestID(ctx context.Context, userID string) context.Context {
 	return metadata.AppendToOutgoingContext(
 		ctx,
 		"x-user-id", userID,
@@ -75,6 +78,13 @@ func calculateFileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func totalParts(fileSize, partSize int64) int32 {
+	if fileSize <= 0 || partSize <= 0 {
+		return 0
+	}
+	return int32((fileSize + partSize - 1) / partSize)
 }
 
 func chunkPartNumbers(items []int32, size int) [][]int32 {
@@ -120,9 +130,9 @@ func uploadPresignedPart(ctx context.Context, url, filePath string, offset, size
 
 func main() {
 	var (
-		addr        = flag.String("addr", "127.0.0.1:50051", "grpc address")
+		addr        = flag.String("addr", "127.0.0.1:50054", "storage_control grpc address")
 		filePath    = flag.String("file", "", "path to big file")
-		userID      = flag.String("user_id", "1", "user id")
+		userID      = flag.String("user_id", "1", "user id for request metadata only")
 		contentType = flag.String("content_type", "application/octet-stream", "content type")
 		fileHash    = flag.String("file_hash", "", "optional file hash; defaults to SHA-256 of file content")
 		parallel    = flag.Int("parallel", 4, "parallel part uploads")
@@ -155,6 +165,7 @@ func main() {
 	fileName := filepath.Base(*filePath)
 	fileSize := fi.Size()
 	statePath := *filePath + ".upload_state.json"
+	objectKey := "files/" + *fileHash
 	baseCtx := context.Background()
 
 	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -163,54 +174,51 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := pb.NewFileServiceClient(conn)
+	client := storagecontrolpb.NewStorageControlClient(conn)
 
 	var st *State
 	if *resume {
 		if s, err := loadState(statePath); err == nil &&
-			s.UploadID != "" &&
+			s.StorageUploadID != "" &&
 			s.FileSize == fileSize &&
 			s.FileHash == *fileHash &&
 			s.UserID == *userID {
 			st = s
-			fmt.Printf("[resume] upload_id=%s object_key=%s\n", st.UploadID, st.ObjectKey)
+			fmt.Printf("[resume] storage_upload_id=%s object_key=%s\n", st.StorageUploadID, st.ObjectKey)
 		}
 	}
 
 	initMultipart := func() *State {
-		resp, err := client.InitMultipart(withUserID(baseCtx, *userID), &pb.InitReq{
-			UserId:      *userID,
-			FileName:    fileName,
-			FileSize:    fileSize,
-			FileHash:    *fileHash,
+		resp, err := client.InitiateMultipart(withRequestID(baseCtx, *userID), &storagecontrolpb.InitiateMultipartReq{
+			ObjectKey:   objectKey,
 			ContentType: *contentType,
+			Metadata: map[string]string{
+				"x-file-name": fileName,
+				"x-file-hash": *fileHash,
+				"x-user-id":   *userID,
+			},
 		})
 		if err != nil {
 			panic(err)
 		}
 
-		if resp.Status != "" && resp.Status != "init" {
-			fmt.Printf("[reuse] status=%s message=%s object_key=%s\n", resp.Status, resp.Message, resp.ObjectKey)
-			os.Exit(0)
-		}
-
 		next := &State{
-			UploadID:    resp.UploadId,
-			ObjectKey:   resp.ObjectKey,
-			PartSize:    resp.PartSize,
-			TotalParts:  resp.TotalParts,
-			FilePath:    *filePath,
-			FileName:    fileName,
-			FileSize:    fileSize,
-			UserID:      *userID,
-			ContentType: *contentType,
-			FileHash:    *fileHash,
+			StorageUploadID: resp.StorageUploadId,
+			ObjectKey:       objectKey,
+			PartSize:        defaultPartSize,
+			TotalParts:      totalParts(fileSize, defaultPartSize),
+			FilePath:        *filePath,
+			FileName:        fileName,
+			FileSize:        fileSize,
+			UserID:          *userID,
+			ContentType:     *contentType,
+			FileHash:        *fileHash,
 		}
 		if err := saveState(statePath, next); err != nil {
 			panic(err)
 		}
-		fmt.Printf("[init] upload_id=%s part_size=%d total_parts=%d object_key=%s\n",
-			next.UploadID, next.PartSize, next.TotalParts, next.ObjectKey)
+		fmt.Printf("[init] storage_upload_id=%s part_size=%d total_parts=%d object_key=%s\n",
+			next.StorageUploadID, next.PartSize, next.TotalParts, next.ObjectKey)
 		return next
 	}
 
@@ -218,29 +226,35 @@ func main() {
 		st = initMultipart()
 	}
 
-	statusResp, err := client.Status(withUserID(baseCtx, st.UserID), &pb.StatusReq{UploadId: st.UploadID})
+	statusResp, err := client.ListParts(withRequestID(baseCtx, st.UserID), &storagecontrolpb.ListPartsReq{
+		ObjectKey:       st.ObjectKey,
+		StorageUploadId: st.StorageUploadID,
+	})
 	if err != nil {
 		_ = os.Remove(statePath)
-		fmt.Printf("[resume] status lookup failed, re-init upload session: %v\n", err)
+		fmt.Printf("[resume] list parts failed, re-init upload session: %v\n", err)
 		st = initMultipart()
-		statusResp, err = client.Status(withUserID(baseCtx, st.UserID), &pb.StatusReq{UploadId: st.UploadID})
+		statusResp, err = client.ListParts(withRequestID(baseCtx, st.UserID), &storagecontrolpb.ListPartsReq{
+			ObjectKey:       st.ObjectKey,
+			StorageUploadId: st.StorageUploadID,
+		})
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	uploadedSet := make(map[int32]bool, len(statusResp.UploadedParts))
-	for _, pn := range statusResp.UploadedParts {
-		uploadedSet[pn] = true
+	uploadedSet := make(map[int32]bool, len(statusResp.Parts))
+	for _, part := range statusResp.Parts {
+		uploadedSet[part.PartNumber] = true
 	}
 
 	missing := make([]int32, 0)
-	for i := int32(1); i <= statusResp.TotalParts; i++ {
+	for i := int32(1); i <= st.TotalParts; i++ {
 		if !uploadedSet[i] {
 			missing = append(missing, i)
 		}
 	}
-	fmt.Printf("[status] total=%d uploaded=%d missing=%d\n", statusResp.TotalParts, len(statusResp.UploadedParts), len(missing))
+	fmt.Printf("[status] total=%d uploaded=%d missing=%d\n", st.TotalParts, len(statusResp.Parts), len(missing))
 
 	partialRun := *stopAfter > 0
 	if partialRun && len(missing) > *stopAfter {
@@ -248,19 +262,6 @@ func main() {
 	}
 
 	for _, batch := range chunkPartNumbers(missing, *parallel) {
-		presigned, err := client.PresignParts(withUserID(baseCtx, st.UserID), &pb.PresignPartsReq{
-			UploadId:    st.UploadID,
-			PartNumbers: batch,
-		})
-		if err != nil {
-			panic(err)
-		}
-
-		urlByPart := make(map[int32]string, len(presigned.Parts))
-		for _, part := range presigned.Parts {
-			urlByPart[part.PartNumber] = part.Url
-		}
-
 		var (
 			wg    sync.WaitGroup
 			mu    sync.Mutex
@@ -271,12 +272,26 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				presigned, err := client.PresignPart(withRequestID(baseCtx, st.UserID), &storagecontrolpb.PresignPartReq{
+					ObjectKey:       st.ObjectKey,
+					StorageUploadId: st.StorageUploadID,
+					PartNumber:      pn,
+					ExpiresSeconds:  int64((15 * time.Minute).Seconds()),
+				})
+				if err != nil {
+					mu.Lock()
+					if first == nil {
+						first = fmt.Errorf("presign part %d: %w", pn, err)
+					}
+					mu.Unlock()
+					return
+				}
 				offset := int64(pn-1) * st.PartSize
 				partSize := st.PartSize
 				if offset+partSize > st.FileSize {
 					partSize = st.FileSize - offset
 				}
-				etag, err := uploadPresignedPart(baseCtx, urlByPart[pn], st.FilePath, offset, partSize)
+				etag, err := uploadPresignedPart(baseCtx, presigned.Url, st.FilePath, offset, partSize)
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil && first == nil {
@@ -297,11 +312,24 @@ func main() {
 		return
 	}
 
-	complete, err := client.CompleteMultipart(withUserID(baseCtx, st.UserID), &pb.CompleteReq{UploadId: st.UploadID})
+	latest, err := client.ListParts(withRequestID(baseCtx, st.UserID), &storagecontrolpb.ListPartsReq{
+		ObjectKey:       st.ObjectKey,
+		StorageUploadId: st.StorageUploadID,
+	})
+	if err != nil {
+		panic(err)
+	}
+	sort.Slice(latest.Parts, func(i, j int) bool { return latest.Parts[i].PartNumber < latest.Parts[j].PartNumber })
+	complete, err := client.CompleteMultipart(withRequestID(baseCtx, st.UserID), &storagecontrolpb.CompleteMultipartReq{
+		ObjectKey:       st.ObjectKey,
+		StorageUploadId: st.StorageUploadID,
+		ContentType:     st.ContentType,
+		Parts:           latest.Parts,
+	})
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("[complete] object_key=%s status=%s etag=%s\n", complete.ObjectKey, complete.Status, complete.Etag)
+	fmt.Printf("[complete] object_key=%s etag=%s\n", complete.ObjectKey, complete.Etag)
 	_ = os.Remove(statePath)
 }

@@ -99,7 +99,7 @@ const char descriptor_table_protodef_proto_2fAI_5fsrv_2fai_2eproto[] PROTOBUF_SE
   "\005 \001(\005\022\r\n\005query\030\006 \001(\t\"5\n\006AIResp\022\014\n\004code\030\001"
   " \001(\005\022\017\n\007message\030\002 \001(\t\022\014\n\004data\030\003 \001(\t21\n\tA"
   "IService\022$\n\tAIrequest\022\t.AI.AIReq\032\n.AI.AI"
-  "Resp\"\000B%Z#clouddisk_v2/file_srv/protobuf"
+  "Resp\"\000B#Z!clouddisk_v2/AI_srv/protobuf"
   ";aipbb\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_proto_2fAI_5fsrv_2fai_2eproto_once;

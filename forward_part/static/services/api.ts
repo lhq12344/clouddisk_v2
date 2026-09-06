@@ -5,7 +5,6 @@ import {
   UploadStatusResponse, 
   FileItem,
   PresignPartsResponse,
-  UploadResponse,
   CompleteMultipartResponse,
   ApiErrorBody
 } from '../types';
@@ -14,17 +13,6 @@ import {
 const BASE_URL = '';  // 使用相对路径，自动适配当前访问地址
 
 const MULTIPART_SESSION_KEY_PREFIX = 'multipart_upload_sessions';
-
-const isLoopbackPresignedUrl = (rawUrl: string) => {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-      ? parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost'
-      : false;
-  } catch {
-    return false;
-  }
-};
 
 const clearMultipartSessionsFromStorage = (storage: Storage) => {
   const keys: string[] = [];
@@ -184,19 +172,6 @@ class ApiService {
     });
   }
 
-  async simpleUpload(file: Blob, filename: string, fileHash: string, contentType?: string): Promise<UploadResponse> {
-    return this.request('/file/upload', {
-      method: 'POST',
-      headers: {
-        'X-File-Name': filename,
-        'X-File-Hash': fileHash,
-        'X-File-Size': file.size.toString(),
-        'Content-Type': contentType || file.type || 'application/octet-stream'
-      },
-      body: file
-    });
-  }
-
   async initMultipart(file_name: string, file_hash: string, file_size: number, content_type?: string): Promise<MultipartInitResponse> {
     return this.request('/file/initupload', {
       method: 'POST',
@@ -212,36 +187,6 @@ class ApiService {
   }
 
   async uploadPresignedPart(url: string, body: Blob) {
-    if (isLoopbackPresignedUrl(url)) {
-      const token = this.getToken();
-      const headers = new Headers();
-      if (token) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-      headers.set('X-Request-Id', crypto.randomUUID());
-      headers.set('X-Presigned-Part-Url', url);
-
-      const response = await fetch(`${BASE_URL}/file/uploadpart`, {
-        method: 'POST',
-        headers,
-        body
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`[STATUS_${response.status}]: ${errorText || 'Part upload failed'}`);
-      }
-      const responseText = await response.text();
-      if (!responseText) {
-        return '';
-      }
-      try {
-        const parsed = JSON.parse(responseText);
-        return parsed.etag || '';
-      } catch {
-        return '';
-      }
-    }
-
     const response = await fetch(url, {
       method: 'PUT',
       body

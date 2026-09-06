@@ -32,7 +32,10 @@ func ListenAutoPort() (net.Listener, int, error) {
 }
 
 func main() {
-	ip := internal.ViperConf.ConsulConfig.AccountSrv.Host
+	ip := internal.ViperConf.ConsulConfig.AISrv.Host
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
 	// ---- 1. 获取随机端口并监听（只监听一次！）----
 	lis, port, err := ListenAutoPort()
 	if err != nil {
@@ -58,11 +61,11 @@ func main() {
 		ip,
 		port)
 	if err != nil {
-		internal.Logger.Error("account_srv 注册失败")
+		internal.Logger.Error("AI_srv 注册失败")
 		return
 	}
 
-	internal.Logger.Info("gRPC Account Service running on " + addr)
+	internal.Logger.Info("gRPC AI Service running on " + addr)
 
 	// ---- 4. 直接 Serve(lis)，不要再次 net.Listen！----
 	if err := grpcServer.Serve(lis); err != nil {

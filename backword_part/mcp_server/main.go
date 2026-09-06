@@ -13,8 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	accountpb "go_test/backword_part/account_server/account_srv/protobuf"
-	filepb "go_test/backword_part/file_server/file_srv/protobuf"
+	storagecontrolpb "go_test/clouddisk_v2/storage_control/protobuf"
 	"go_test/internal"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -65,26 +64,20 @@ type config struct {
 	httpAddr       string
 	baseURL        string
 	basePath       string
-	accountAddr    string
-	fileAddr       string
+	storageAddr    string
 	consulAddr     string
 	dialTimeout    time.Duration
 	requestTimeout time.Duration
 }
 
 type serviceClients struct {
-	accountConn *grpc.ClientConn
-	fileConn    *grpc.ClientConn
-	account     accountpb.AccountServiceClient
-	file        filepb.FileServiceClient
+	storageConn    *grpc.ClientConn
+	storageControl storagecontrolpb.StorageControlClient
 }
 
 func (c *serviceClients) Close() {
-	if c.accountConn != nil {
-		_ = c.accountConn.Close()
-	}
-	if c.fileConn != nil {
-		_ = c.fileConn.Close()
+	if c.storageConn != nil {
+		_ = c.storageConn.Close()
 	}
 }
 
@@ -270,11 +263,7 @@ func loadConfig() (config, error) {
 	port := internal.ViperConf.ConsulConfig.MCPSrv.Port
 	addr := fmt.Sprintf("%v:%d", ip, port)
 
-	accountADDR, err := FindServer("account_srv")
-	if err != nil {
-		return config{}, err
-	}
-	fileADDR, err := FindServer("file_srv")
+	storageADDR, err := FindServer("storage_control")
 	if err != nil {
 		return config{}, err
 	}
@@ -285,8 +274,7 @@ func loadConfig() (config, error) {
 		httpAddr:       addr,
 		baseURL:        defaultBaseURL,
 		basePath:       defaultBasePath,
-		accountAddr:    accountADDR,
-		fileAddr:       fileADDR,
+		storageAddr:    storageADDR,
 		consulAddr:     consulADDR,
 		dialTimeout:    defaultDialTimeout,
 		requestTimeout: defaultRequestTimeout,
@@ -307,21 +295,14 @@ func normalizeBasePath(basePath string) string {
 }
 
 func newServiceClients(cfg config) (*serviceClients, error) {
-	accountConn, err := dialGRPC(cfg.accountAddr, cfg.dialTimeout)
+	storageConn, err := dialGRPC(cfg.storageAddr, cfg.dialTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("dial account grpc: %w", err)
-	}
-	fileConn, err := dialGRPC(cfg.fileAddr, cfg.dialTimeout)
-	if err != nil {
-		_ = accountConn.Close()
-		return nil, fmt.Errorf("dial file grpc: %w", err)
+		return nil, fmt.Errorf("dial storage_control grpc: %w", err)
 	}
 
 	return &serviceClients{
-		accountConn: accountConn,
-		fileConn:    fileConn,
-		account:     accountpb.NewAccountServiceClient(accountConn),
-		file:        filepb.NewFileServiceClient(fileConn),
+		storageConn:    storageConn,
+		storageControl: storagecontrolpb.NewStorageControlClient(storageConn),
 	}, nil
 }
 

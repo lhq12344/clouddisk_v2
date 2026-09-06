@@ -80,6 +80,7 @@ func Initdb() *gorm.DB {
 		{name: "accounts", model: &model.Account{}},
 		{name: "files", model: &model.File{}},
 		{name: "user_files", model: &model.UserFile{}},
+		{name: "upload_sessions", model: &model.UploadSession{}},
 		{name: "outboxes", model: &model.Outbox{}},
 		{name: "inboxes", model: &model.Inbox{}},
 		{name: "dlq_failures", model: &model.DLQFailure{}},

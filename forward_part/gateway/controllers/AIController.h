@@ -11,6 +11,10 @@
 #include "../MyAppData.h"
 #include "../../logs/Logger.h"
 
+#include <functional>
+#include <memory>
+#include <string>
+
 using namespace drogon;
 
 class AIController : public drogon::HttpController<AIController>

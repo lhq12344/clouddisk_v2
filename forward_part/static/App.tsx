@@ -81,6 +81,34 @@ const openExternalUrl = (url: string) => {
   }
 };
 
+const isInitiatedUploadStatus = (status?: string) => !status || status === 'init' || status === 'initiated';
+
+const uploadBlobViaMultipart = async (blob: Blob, filename: string, fileHash: string) => {
+  const init = await api.initMultipart(filename, fileHash, blob.size, blob.type || textContentType(filename));
+  if (!isInitiatedUploadStatus(init.status)) {
+    throw new Error(init.message || init.status || 'Upload init failed');
+  }
+  if (!init.upload_id || !init.part_size || !init.total_parts) {
+    throw new Error('Multipart init response missing upload session data');
+  }
+
+  const status = await api.getMultipartStatus(init.upload_id);
+  const uploadedParts = new Set(status.uploaded_parts || []);
+  for (let partNumber = 1; partNumber <= init.total_parts; partNumber++) {
+    if (uploadedParts.has(partNumber)) continue;
+    const presigned = await api.presignParts(init.upload_id, [partNumber]);
+    const url = presigned.parts.find((part) => part.part_number === partNumber)?.url;
+    if (!url) {
+      throw new Error(`Missing presigned URL for part ${partNumber}`);
+    }
+    const start = (partNumber - 1) * init.part_size;
+    const end = Math.min(start + init.part_size, blob.size);
+    await api.uploadPresignedPart(url, blob.slice(start, end));
+  }
+
+  return api.completeMultipart(init.upload_id);
+};
+
 const triggerBrowserDownload = (url: string) => {
   const rewritten = rewriteMinioUrl(url);
   const link = document.createElement('a');
@@ -276,7 +304,7 @@ const App: React.FC = () => {
     try {
       const fileHash = await sha256Hex(editContent);
       const blob = new Blob([editContent], { type: textContentType(editingFile.filename) });
-      await api.simpleUpload(blob, editingFile.filename, fileHash, blob.type);
+      await uploadBlobViaMultipart(blob, editingFile.filename, fileHash);
       setEditingFile(null);
       setIsNewFile(false);
       await fetchFiles();

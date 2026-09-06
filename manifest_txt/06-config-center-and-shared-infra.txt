@@ -1,3 +1,7 @@
+# Archived pre-Core-migration snapshot
+
+> This manifest was produced before the Core API responsibility refactor. It is retained as historical reading material only. For the current topology and commands, use `AGENTS.md`, `docs/adr/0001-core-api-responsibility-boundaries.md`, and `docs/contracts/core-migration-completion-audit.md`.
+
 # 06. 配置中心与共享基础设施：Nacos/Viper 热更新与全局客户端
 
 ## 本章定位
